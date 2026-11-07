@@ -1,0 +1,37 @@
+{
+  "name": "commerce-os",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "workspaces": [
+    "packages/*",
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server",
+    "db:migrate": "npm run db:migrate -w server",
+    "db:seed": "npm run db:seed -w server",
+    "typecheck": "tsc -p server/tsconfig.json --noEmit",
+    "test": "npm run lint && npm run test -w packages/domain && npm run test -w server",
+    "test:e2e": "node e2e/run.mjs",
+    "lint": "eslint web/src packages/domain/src",
+    "db:backup": "npm run db:backup -w server --",
+    "db:restore": "npm run db:restore -w server --",
+    "vercel-build": "node scripts/build-vercel.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
+    "playwright": "^1.50.0",
+    "typescript": "^5.6.0"
+  }
+}

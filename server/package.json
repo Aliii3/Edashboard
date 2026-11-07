@@ -1,0 +1,28 @@
+{
+  "name": "@commerce-os/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../.env --watch src/index.ts",
+    "start": "node --env-file-if-exists=../.env src/index.ts",
+    "db:migrate": "node --env-file-if-exists=../.env src/cli.ts migrate",
+    "db:seed": "node --env-file-if-exists=../.env src/cli.ts seed",
+    "test": "node --test --test-concurrency=1 test/api.test.ts test/parity.test.ts",
+    "db:backup": "node --env-file-if-exists=../.env src/cli.ts backup",
+    "db:restore": "node --env-file-if-exists=../.env src/cli.ts restore"
+  },
+  "dependencies": {
+    "@commerce-os/domain": "*",
+    "@fastify/compress": "^9.3.0",
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/helmet": "^13.2.0",
+    "@fastify/static": "^10.1.10",
+    "@vercel/functions": "^3.11.0",
+    "fastify": "^5.12.8",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0"
+  }
+}
