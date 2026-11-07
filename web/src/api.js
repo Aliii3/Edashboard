@@ -15,7 +15,7 @@ export async function request(path, { method = 'GET', body } = {}) {
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && path !== '/api/auth/login' && path !== '/api/me') { Session.onAuthLost?.(); throw new Rule('Your session ended. Please sign in again.'); }
   if (res.status === 413) throw new Rule('That file is too large to upload here. Use npm run db:restore from a computer instead.');
-  if (!res.ok) throw new Rule(data.error || 'Something went wrong. No changes were saved.');
+  if (!res.ok) throw new Rule(data.error || `The server returned an error (${res.status}). Open /api/health to check the setup.`);
   return data;
 }
 let loading = null;

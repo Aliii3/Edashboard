@@ -21,20 +21,41 @@ export async function withTx<T>(fn: (c: Client) => Promise<T>, isolation = 'READ
   finally { c.release(); }
 }
 
-const MIGRATIONS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../db/migrations');
-/* Uses a transaction-scoped lock, which also works through connection poolers. */
+/* The Vercel bundle embeds the migration files, since the function can't read the repo. */
+declare const __MIGRATIONS__: { name: string; sql: string }[] | undefined;
+async function migrationFiles() {
+  if (typeof __MIGRATIONS__ !== 'undefined') return __MIGRATIONS__;
+  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../db/migrations');
+  return Promise.all((await readdir(dir)).filter(x => x.endsWith('.sql')).sort().map(async name => ({ name, sql: await readFile(path.join(dir, name), 'utf8') })));
+}
+/* Creates or updates the tables. Safe to call on every cold start: it only locks when something is pending,
+   and the lock is transaction-scoped so it works through connection poolers. */
 export async function migrateDb(): Promise<string[]> {
+  const files = await migrationFiles();
+  const applied = await pool.query(`SELECT to_regclass('schema_migrations') IS NOT NULL AS ok`).then(async r => r.rows[0].ok ? new Set((await pool.query('SELECT name FROM schema_migrations')).rows.map(x => x.name)) : new Set<string>());
+  if (files.every(f => applied.has(f.name))) return [];
   return withTx(async c => {
     await c.query('SELECT pg_advisory_xact_lock(7263001)');
     await c.query('CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, ran_at timestamptz NOT NULL DEFAULT now())');
     const done = new Set((await c.query('SELECT name FROM schema_migrations')).rows.map(r => r.name)), ran: string[] = [];
-    for (const f of (await readdir(MIGRATIONS)).filter(x => x.endsWith('.sql')).sort()) {
-      if (done.has(f)) continue;
-      await c.query(await readFile(path.join(MIGRATIONS, f), 'utf8'));
-      await c.query('INSERT INTO schema_migrations(name) VALUES($1)', [f]); ran.push(f);
+    for (const f of files) {
+      if (done.has(f.name)) continue;
+      await c.query(f.sql);
+      await c.query('INSERT INTO schema_migrations(name) VALUES($1)', [f.name]); ran.push(f.name);
     }
     return ran;
   });
+}
+/* Turns a connection or setup failure into an instruction the owner can act on. Never includes secrets. */
+export function describeDbError(e: any) {
+  if (!process.env.DATABASE_URL) return "DATABASE_URL isn't set. Add your PostgreSQL connection string in Vercel → Settings → Environment Variables, then redeploy.";
+  const c = e?.code;
+  if (c === 'ENOTFOUND' || c === 'EAI_AGAIN') return "The database host in DATABASE_URL couldn't be found. Check the connection string.";
+  if (c === 'ECONNREFUSED' || c === 'ETIMEDOUT' || /timeout/i.test(e?.message || '')) return "Couldn't connect to the database in DATABASE_URL. Check the connection string, and that the database is running.";
+  if (c === '28P01' || c === '28000') return 'The database rejected the username or password in DATABASE_URL.';
+  if (c === '3D000') return "The database named in DATABASE_URL doesn't exist.";
+  if (/ssl|tls|certificate/i.test(e?.message || '')) return 'The database connection failed on SSL. Add ?sslmode=require to the end of DATABASE_URL.';
+  return `Database setup failed (${c || 'unknown error'}). Check the function logs in Vercel for details.`;
 }
 
 export const snake = (s: string) => s.replace(/[A-Z]/g, c => '_' + c.toLowerCase());

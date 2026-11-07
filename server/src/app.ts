@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { Rule, ROLES } from '@commerce-os/domain';
-import { pool, ensureColumns } from './db.ts';
+import { pool, ensureColumns, migrateDb, describeDbError } from './db.ts';
 import { COOKIE, SESSION_DAYS, createSession, destroySession, destroyUserSessions, userFromToken, hashPassword, checkPassword, validPassword, dummyHash, tooManyAttempts, recordFailure, ensureAdmin } from './auth.ts';
 import { Forbidden, runCommand, resetDemo, loadTest, restore, ensureWorkspace, type User } from './store.ts';
 import { version, snapshotPage, driverSnapshot, changesSince, backupChunks } from './reads.ts';
@@ -21,6 +21,14 @@ const UNIQUE: Record<string, string> = {
   users_email_key: 'A login with that email already exists.', deliveries_one_active_per_order: 'This order already has an active delivery.',
 };
 
+/* Database setup runs once per server instance, on the first request, and retries after a failure. */
+let setup: Promise<void> | null = null;
+class SetupError extends Error {}
+export function databaseReady() {
+  return setup ??= (async () => { await migrateDb(); await ensureColumns(); await ensureWorkspace(); })()
+    .catch(e => { setup = null; console.error('Database setup failed:', e?.code, e?.message); throw new SetupError(describeDbError(e)); });
+}
+
 export async function buildApp({ serveStatic = false } = {}) {
   const app = Fastify({ logger: process.env.LOG === '1' ? { level: 'info' } : false, bodyLimit: 4 * 1024 * 1024, trustProxy: true });
   await app.register(helmet, { contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], scriptSrc: ["'self'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], baseUri: ["'self'"], frameAncestors: ["'none'"], upgradeInsecureRequests: null } } });
@@ -28,6 +36,7 @@ export async function buildApp({ serveStatic = false } = {}) {
   await app.register(compress, { encodings: ['gzip'], threshold: 1024 });
   app.decorateRequest('user', null);
   app.setErrorHandler((err: any, _req, reply) => {
+    if (err instanceof SetupError) return reply.code(503).send({ error: err.message });
     if (err instanceof Rule) return reply.code(422).send({ error: err.message });
     if (err instanceof Forbidden) return reply.code(403).send({ error: err.message });
     if (err.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: err.message });
@@ -45,13 +54,23 @@ export async function buildApp({ serveStatic = false } = {}) {
   const setCookie = (reply: FastifyReply, token: string) => reply.setCookie(COOKIE, token, { path: '/', httpOnly: true, sameSite: 'strict', secure, maxAge: SESSION_DAYS * 86400 });
   const noStore = (reply: FastifyReply) => reply.header('Cache-Control', 'no-store');
   app.addHook('onSend', async (req, reply) => { if (req.url.startsWith('/api/')) noStore(reply); });
+  app.addHook('onRequest', async req => { if (req.url.startsWith('/api/') && !req.url.startsWith('/api/health')) await databaseReady(); });
 
-  app.get('/api/health', async () => { await pool.query('SELECT 1'); return { ok: true }; });
+  /* Open /api/health in a browser to check the deployment's configuration. */
+  app.get('/api/health', async (_req, reply) => {
+    const report: any = { database: 'not checked', owner: 'unknown', settings: { DATABASE_URL: !!process.env.DATABASE_URL, ADMIN_EMAIL: !!process.env.ADMIN_EMAIL, ADMIN_PASSWORD: !!process.env.ADMIN_PASSWORD } };
+    try { await databaseReady(); report.database = 'connected, tables ready'; }
+    catch (e: any) { report.database = 'error'; report.problem = e.message; return reply.code(503).send({ ok: false, ...report }); }
+    const users = (await pool.query('SELECT count(*)::int AS n FROM users')).rows[0].n;
+    report.owner = users ? `${users} login${users > 1 ? 's' : ''} exist` : process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD ? 'will be created on first sign-in' : 'missing: set ADMIN_EMAIL and ADMIN_PASSWORD';
+    return { ok: !!users || (!!process.env.ADMIN_EMAIL && (process.env.ADMIN_PASSWORD || '').length >= 10), ...report };
+  });
   app.get('/api/config', async () => ({ demoTools: demoTools() }));
   app.post('/api/auth/login', async (req, reply) => {
     const { email, password } = (req.body || {}) as any, e = String(email ?? '').trim().toLowerCase(), ip = req.ip || '';
     if (await tooManyAttempts(e, ip)) return reply.code(429).send({ error: 'Too many attempts. Wait 15 minutes and try again.' });
-    await ensureWorkspace(); await ensureAdmin();
+    await ensureAdmin();
+    if (!(await pool.query('SELECT 1 FROM users LIMIT 1')).rowCount) return reply.code(503).send({ error: 'No owner login exists yet. Set ADMIN_EMAIL and ADMIN_PASSWORD (10+ characters) in Vercel → Settings → Environment Variables, then redeploy.' });
     const u = e ? (await pool.query('SELECT id, password_hash, active FROM users WHERE email=$1', [e])).rows[0] : null;
     const good = await checkPassword(String(password ?? ''), u?.password_hash || await dummyHash());
     if (!u || !good || !u.active) { await recordFailure(e, ip); return reply.code(401).send({ error: 'Wrong email or password.' }); }
@@ -127,6 +146,5 @@ export async function buildApp({ serveStatic = false } = {}) {
     const { default: fstatic } = await import('@fastify/static');
     await app.register(fstatic, { root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web/dist') });
   }
-  await ensureColumns();
   return app;
 }

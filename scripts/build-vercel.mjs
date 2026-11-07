@@ -32,6 +32,7 @@ await cp(path.join(root, 'web/dist'), path.join(out, 'static'), { recursive: tru
 await build({
   entryPoints: [path.join(root, 'server/src/vercel.ts')], outfile: path.join(fn, 'index.mjs'), bundle: true, platform: 'node', format: 'esm', target: 'node22',
   external: ['pg-native', '@fastify/static'], legalComments: 'none', logLevel: 'warning',
+  define: { __MIGRATIONS__: JSON.stringify(await Promise.all((await (await import('node:fs/promises')).readdir(path.join(root, 'db/migrations'))).filter(f => f.endsWith('.sql')).sort().map(async name => ({ name, sql: await (await import('node:fs/promises')).readFile(path.join(root, 'db/migrations', name), 'utf8') })))) },
   banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
 });
 await writeFile(path.join(fn, '.vc-config.json'), JSON.stringify({ runtime: 'nodejs22.x', handler: 'index.mjs', launcherType: 'Nodejs', shouldAddHelpers: false, supportsResponseStreaming: true, maxDuration: 60 }, null, 2));
