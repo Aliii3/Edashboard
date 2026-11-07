@@ -1,3 +1,18 @@
-{ "name": "@commerce-os/web", "version": "1.0.0", "private": true, "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build", "preview": "vite preview" },
-  "dependencies": { "@commerce-os/domain": "*" }, "devDependencies": { "vite": "^7.0.0" } }
+{
+  "name": "@commerce-os/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "vercel-build": "node ../scripts/build-vercel.mjs"
+  },
+  "dependencies": {
+    "@commerce-os/domain": "*"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}

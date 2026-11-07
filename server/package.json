@@ -10,7 +10,8 @@
     "db:seed": "node --env-file-if-exists=../.env src/cli.ts seed",
     "test": "node --test --test-concurrency=1 test/api.test.ts test/parity.test.ts",
     "db:backup": "node --env-file-if-exists=../.env src/cli.ts backup",
-    "db:restore": "node --env-file-if-exists=../.env src/cli.ts restore"
+    "db:restore": "node --env-file-if-exists=../.env src/cli.ts restore",
+    "vercel-build": "node ../scripts/build-vercel.mjs"
   },
   "dependencies": {
     "@commerce-os/domain": "*",

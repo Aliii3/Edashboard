@@ -4,7 +4,10 @@ import { execSync } from 'node:child_process';
 import { rm, mkdir, writeFile, cp } from 'node:fs/promises';
 import path from 'node:path';
 import { build } from 'esbuild';
-const root = path.resolve(import.meta.dirname, '..'), out = path.join(root, '.vercel/output'), fn = path.join(out, 'functions/api.func');
+/* Vercel reads .vercel/output from the project's Root Directory, which is where npm was started.
+   Writing it there means the build works whether the Root Directory is the repo root, server/ or web/. */
+const root = path.resolve(import.meta.dirname, '..'), out = path.join(process.env.INIT_CWD || root, '.vercel/output'), fn = path.join(out, 'functions/api.func');
+console.log(`Writing ${path.relative(root, out) || '.'}`);
 /* Applies migrations during the build only when asked, so preview builds never change the production database. */
 if (process.env.MIGRATE_ON_BUILD === '1') execSync('node src/cli.ts migrate', { cwd: path.join(root, 'server'), stdio: 'inherit' });
 execSync(`npx vite build${process.env.E2E_BUILD === '1' ? ' --mode e2e' : ''}`, { cwd: path.join(root, 'web'), stdio: 'inherit' });
