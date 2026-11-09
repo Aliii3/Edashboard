@@ -2,9 +2,9 @@
    workspace in memory. Stock and reservation totals for everything else arrive
    as one summary row per item. */
 import { TERMINAL } from './terminal.ts';
-import { selectRows, readWorkspace, idParam, type Client } from './db.ts';
+import { selectRows, readWorkspace, idParam, loadAll, type Client } from './db.ts';
 
-export type Scope = { orders: any[]; deliveries: any[]; drivers: any[]; cases: any[]; discrepancies: any[]; driverExpenses: any[]; customers: any[]; phones: any[]; campaignSpend: any[]; expenses: any[]; production: any[] };
+export type Scope = { all?: boolean; orders: any[]; deliveries: any[]; drivers: any[]; cases: any[]; discrepancies: any[]; driverExpenses: any[]; customers: any[]; phones: any[]; campaignSpend: any[]; expenses: any[]; production: any[] };
 const scope = (o: Partial<Scope> = {}): Scope => ({ orders: [], deliveries: [], drivers: [], cases: [], discrepancies: [], driverExpenses: [], customers: [], phones: [], campaignSpend: [], expenses: [], production: [], ...o });
 const phone = (p: unknown) => typeof p === 'string' ? p.replace(/[\s-]/g, '') : null;
 const first = (a: any[]) => a[0] && typeof a[0] === 'object' ? a[0] : {};
@@ -31,6 +31,8 @@ export function scopeFor(name: string, a: any[]): Scope {
     case 'addSpend': return scope({ campaignSpend: [first(a).campaignId] });
     case 'removeExpense': return scope({ expenses: [a[0]] });
     case 'saveDriver': return scope({ drivers: first(a).id ? [first(a).id] : [] });
+    case 'closePeriod': return scope({ all: true });   // closing figures need the whole ledger
+    case 'reopenPeriod': return scope();
     case 'adjustStock': case 'createProduction': case 'receiveMaterial': case 'saveSku': case 'saveCampaign': case 'addExpense':
     case 'setAvailability': case 'saveCourier': case 'saveSettings': case 'setRoadmap': return scope();
     default: throw new Error(`No data scope defined for ${name}`);
@@ -42,6 +44,7 @@ const clean = (a: any[]) => [...new Set(a.filter(x => x !== undefined && x !== n
 export async function loadScope(c: Client, s: Scope) {
   const w = await readWorkspace(c, true);
   if (!w) throw new Error('Workspace not initialized. Run npm run db:migrate.');
+  if (s.all) return { data: (await loadAll(c))!.data, version: Number(w.version) };
   const tables: Record<string, Map<any, any>> = {};
   const put = (t: string, rows: any[]) => { const m = tables[t] ??= new Map(); for (const r of rows) m.set(r.id, r); return rows; };
   const byIds = async (t: string, ids: any[]) => ids.length ? put(t, await selectRows(c, t, `id = ANY($1)`, [idParam(t, ids)])) : [];

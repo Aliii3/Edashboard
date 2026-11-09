@@ -6,9 +6,10 @@ process.env.NODE_ENV = 'test';
 const { migrateDb, ensureColumns, pool, loadAll, replaceAll, withTx } = await import('../src/db.ts');
 const { hashPassword } = await import('../src/auth.ts');
 const { buildApp } = await import('../src/app.ts');
-const { Repo, integrity, driverCash, stockOnHand } = await import('@commerce-os/domain');
+const { Repo, integrity, driverCash, stockOnHand, dateKey } = await import('@commerce-os/domain');
 const { buildSeedWorkspace } = await import('@commerce-os/domain/seed');
 const PW = 'test-password-123';
+const { EXPENSE_CATS } = await import('@commerce-os/domain'); const EXPENSE_CAT = EXPENSE_CATS[0];
 let app: any; const cookies: Record<string, string> = {};
 const call = async (who: string | null, method: string, url: string, body?: any) => {
   const r = await app.inject({ method, url, headers: who ? { cookie: cookies[who] } : {}, ...(body !== undefined ? { payload: body } : {}) });
@@ -153,6 +154,60 @@ test('incremental sync returns exactly what changed', async () => {
   assert.equal((await call('drv', 'GET', '/api/snapshot?table=orders&after=0')).status, 403, 'drivers cannot page the whole workspace');
   const page = (await call('ops', 'GET', '/api/snapshot?table=orders&after=0')).json(); assert.ok(page.rows.length > 100); assert.equal(page.next, null);
   assert.equal((await call('ops', 'GET', '/api/snapshot?table=users&after=0')).status, 400, 'logins are never exposed');
+});
+test('staff only receive the figures their role may see', async () => {
+  const page = async (who: string, t: string) => (await call(who, 'GET', `/api/snapshot?table=${t}&after=0`)).json().rows;
+  assert.ok((await page('fin', 'spend')).length > 0);
+  assert.equal((await page('ops', 'spend')).length, 0);
+  assert.equal((await page('wh', 'expenses')).length, 0);
+  assert.equal((await page('wh', 'contacts')).length, 0);
+  assert.ok((await page('ops', 'contacts')).length > 0);
+  assert.ok((await page('fin', 'lines')).some((l: any) => l.unitCost > 0));
+  assert.ok((await page('wh', 'lines')).every((l: any) => l.unitCost === 0));
+  assert.ok((await page('ops', 'materials')).every((x: any) => x.cost === 0));
+  assert.ok((await page('ops', 'boms')).every((x: any) => x.labor === 0 && x.overhead === 0));
+  assert.ok((await page('fin', 'events')).some((e: any) => e.audience === 'finance'));
+  assert.ok((await page('ops', 'events')).every((e: any) => e.audience !== 'finance'));
+  /* A command's reply and later syncs are cut down the same way. */
+  const v = (await call('ops', 'GET', '/api/version')).json().v;
+  const o = await cmd('ops', 'createOrder', { customerId: 'C-0001', lines: [{ sku: 'TEE-IVR', qty: 1 }], channel: 'Phone' });
+  assert.ok(o.json().delta.changes.filter((c: any) => c.t === 'lines').every((c: any) => c.row.unitCost === 0));
+  const fx = await cmd('fin', 'addExpense', { name: 'Courier bags', category: EXPENSE_CAT, amount: 120 });
+  assert.equal(fx.status, 200); assert.ok(fx.json().delta.changes.some((c: any) => c.t === 'expenses'));
+  const ch = (await call('ops', 'GET', `/api/changes?since=${v}`)).json();
+  assert.ok(ch.changes.some((c: any) => c.t === 'lines') && ch.changes.every((c: any) => c.t !== 'expenses' && c.row.audience !== 'finance' && (c.t !== 'lines' || c.row.unitCost === 0)));
+  /* Operations can edit a SKU without seeing its costs, and the costs are kept. */
+  const bom = (await pool.query(`SELECT labor, overhead FROM boms WHERE id='TEE-IVR'`)).rows[0], sku = (await pool.query(`SELECT * FROM skus WHERE id='TEE-IVR'`)).rows[0];
+  assert.equal((await cmd('ops', 'saveSku', { id: 'TEE-IVR', name: sku.name, variant: sku.variant, price: sku.price, min: sku.min, labor: 0, overhead: 0, bom: [{ material: 'FAB-COT', qty: 1.2 }, { material: 'TRM-KIT', qty: 1 }, { material: 'PKG-KIT', qty: 1 }] })).status, 200);
+  assert.deepEqual((await pool.query(`SELECT labor, overhead FROM boms WHERE id='TEE-IVR'`)).rows[0], bom);
+  assert.equal((await call('ops', 'GET', '/api/snapshot?table=campaigns&after=0')).json().rows.every((c: any) => c.budget === 0), true);
+});
+test('closing the books locks past figures', async () => {
+  await full();
+  const yesterday = dateKey(new Date(Date.now() - 864e5).toISOString()), noonYesterday = new Date(yesterday + 'T10:00:00Z').toISOString();
+  assert.equal((await cmd('ops', 'closePeriod', yesterday)).status, 403);
+  assert.equal((await cmd('fin', 'closePeriod', dateKey(new Date().toISOString()))).status, 422);   // today hasn't ended
+  assert.equal((await cmd('fin', 'closePeriod', yesterday)).status, 200);
+  assert.equal((await cmd('fin', 'closePeriod', yesterday)).status, 422);
+  const late = await cmd('fin', 'addExpense', { name: 'Late invoice', category: EXPENSE_CAT, amount: 50, at: noonYesterday });
+  assert.equal(late.status, 422); assert.match(late.json().error, /closed through/);
+  assert.equal((await cmd('fin', 'addSpend', { campaignId: (await pool.query('SELECT id FROM campaigns LIMIT 1')).rows[0].id, amount: 10, at: noonYesterday })).status, 422);
+  const old = (await pool.query(`SELECT id FROM expenses WHERE at < $1::date ORDER BY at LIMIT 1`, [yesterday])).rows[0];
+  assert.equal((await cmd('fin', 'removeExpense', old.id)).status, 422);
+  assert.equal((await cmd('fin', 'addExpense', { name: 'Today invoice', category: EXPENSE_CAT, amount: 50 })).status, 200);
+  await full();
+  const checks = integrity(), closing = checks.find((x: any) => x.name.startsWith('Closed books'));
+  assert.ok(closing?.ok); assert.equal(checks.filter((x: any) => !x.ok).length, 0);
+  /* Only owner and finance receive the closing figures. */
+  assert.ok((await call('fin', 'GET', '/api/version')).json().settings.periodLog.at(-1).figures.profit !== undefined);
+  assert.equal((await call('ops', 'GET', '/api/version')).json().settings.periodLog.at(-1).figures, undefined);
+  /* Only the owner reopens, with a reason. */
+  assert.equal((await cmd('fin', 'reopenPeriod', null, 'Fix')).status, 403);
+  assert.equal((await cmd('owner', 'reopenPeriod', null, ' ')).status, 422);
+  assert.equal((await cmd('owner', 'reopenPeriod', null, 'Supplier invoice arrived late')).status, 200);
+  assert.equal((await cmd('fin', 'addExpense', { name: 'Late invoice', category: EXPENSE_CAT, amount: 50, at: noonYesterday })).status, 200);
+  const log = (await pool.query('SELECT settings FROM workspace')).rows[0].settings.periodLog;
+  assert.deepEqual(log.map((x: any) => x.kind), ['close', 'reopen']);
 });
 test('team management', async () => {
   assert.equal((await call('owner', 'POST', '/api/users', { email: 'x@t.test', name: 'X', role: 'operations', password: 'short' })).status, 422);

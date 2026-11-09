@@ -27,9 +27,13 @@ If anything fails, nothing is saved.
 
 **Reading.** Staff browsers download the workspace in pages under 3 MB (`/api/snapshot`), then poll `/api/changes` every few seconds for only what changed. Drivers receive only their own deliveries (`/api/snapshot/mine`).
 
+**Who sees what.** The server removes what a role may not read before data leaves the database (`redactRow` in `packages/domain/src/permissions.js`). Owner and finance see everything. Operations and warehouse don't receive product costs, profit, campaign spend or company expenses, and warehouse doesn't receive the customer contact log. Screens hide the matching columns.
+
 **Money.** Every figure comes from dated records through one ledger (`orderEntries` in `packages/domain/src/domain.js`), so screens can't disagree.
 
 **Database rules.** PostgreSQL also enforces: unique payment, handover and settlement references; one active delivery per order; unique stock-movement keys; and an append-only stock journal and activity log.
+
+**Closed periods.** Finance closes the books through a date (Finance → Closed periods). After that, no handover, settlement, campaign spend or expense can be added, back-dated or removed on or before that date, so the closed figures stay fixed. The figures at closing are stored, and the integrity check compares them with today's figures for the same dates. Only the owner can reopen, with a reason, and every close and reopen is kept.
 
 ## Run it locally
 
@@ -88,6 +92,6 @@ DATABASE_URL="<demo database>" ALLOW_DEMO_SEED=1 SEED_PASSWORD="<password>" npm 
 
 - **One change at a time.** Changes are serialized across the whole workspace through the database lock. That's correct and simple, and suits an operations team. Thousands of changes per minute would need finer-grained locks.
 - **Full workspace in each staff browser.** Each staff browser holds the workspace, loaded in pages at sign-in. Very large histories will need server-side search and reports.
-- **Staff read access isn't restricted.** Writes are enforced on the server for every role, and drivers only receive their own data. Other staff roles have restricted screens, but receive shared records.
+- **Read limits are by role, not by record.** Operations and warehouse receive every order and customer, without costs and profit. Limiting staff to some customers or areas would need record-level rules.
 - **No integrations.** There are no live connections to stores, couriers, ad platforms or payment gateways.
-- **Not accounting software.** There's no tax handling, and one workspace per deployment.
+- **Not accounting software.** There's no tax handling, and one workspace per deployment. Restoring a backup replaces closed periods along with everything else.

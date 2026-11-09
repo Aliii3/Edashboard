@@ -1,11 +1,13 @@
 /* Client side of the API. Screens call Commands.x() as before; the server runs
    the command. The workspace loads in pages, then stays current by fetching only
    what changed since the last sync. */
-import { Repo, Rule, canRun, ROLE_SCREENS, SCHEMA } from '@commerce-os/domain';
+import { Repo, Rule, canRun, seesCosts, ROLE_SCREENS, SCHEMA } from '@commerce-os/domain';
 export const Session = { user: null, demoTools: false, online: true, version: 0, onAuthLost: null, onChange: null, onProgress: null,
   can(cmd) { return !!this.user && canRun(this.user.role, cmd); },
   canSee(screen) { return !!this.user && ROLE_SCREENS[this.user.role].includes(screen); },
   get isDriver() { return this.user?.role === 'driver'; },
+  /* Product costs, profit, campaign spend and company expenses: owner and finance only. The server enforces it. */
+  get seesCosts() { return !!this.user && seesCosts(this.user.role); },
 };
 export async function request(path, { method = 'GET', body } = {}) {
   let res;

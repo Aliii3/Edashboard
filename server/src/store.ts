@@ -1,7 +1,7 @@
 /* Runs commands statelessly: lock the workspace, load what the command reads,
    apply the shared rules, write the changed rows and log them for sync. Safe to
    run on any number of server instances at once. */
-import { Repo, Commands, Actor, SCHEMA_VERSION, DRIVER_SCOPE, Rule, canRun, carrierKey, migrate } from '@commerce-os/domain';
+import { Repo, Commands, Actor, SCHEMA_VERSION, DRIVER_SCOPE, Rule, canRun, carrierKey, migrate, seesCosts } from '@commerce-os/domain';
 import { buildSeedWorkspace, runLoadTest } from '@commerce-os/domain/seed';
 import { withTx, persistChanges, recordChanges, saveMeta, replaceAll, loadAll, readWorkspace, ensureColumns, type Change } from './db.ts';
 import { loadScope, scopeFor } from './scope.ts';
@@ -34,6 +34,11 @@ export function runCommand(user: User, name: string, args: any[]) {
       const { data, version } = await loadScope(c, scopeFor(name, args));
       Repo.load(data);
       authorizeDriver(user, name, args);
+      /* Roles that can't see costs can't change them: an edited SKU keeps its labor and overhead. */
+      if (name === 'saveSku' && !seesCosts(user.role) && args[0] && typeof args[0] === 'object') {
+        const b = Repo.get('boms', String(args[0].id ?? '').trim().toUpperCase());
+        args = [{ ...args[0], labor: b?.labor ?? 0, overhead: b?.overhead ?? 0 }, ...args.slice(1)];
+      }
       Actor.current = user.name; Repo.begin();
       let result: any, changes: Change[];
       try { result = Commands[name](...args); changes = [...Repo.capture.values()] as Change[]; }

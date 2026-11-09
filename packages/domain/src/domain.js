@@ -45,6 +45,12 @@ function dateKey(iso) {
   v = _dkf.format(new Date(iso)); if (_dk.size > 200000) _dk.clear(); _dk.set(iso, v); return v;
 }
 const activityBy = () => Actor.current || S().operator || 'System';
+/* Closed books: nothing may be added, dated or removed on or before the locked date. */
+const lockedThrough = () => S()?.lockedThrough || null;
+function assertOpen(at, what) {
+  const lock = lockedThrough(), d = dateKey(at || Clock.now());
+  if (lock && d <= lock) fail(`${what} is dated ${d}, but the books are closed through ${lock}. Date it after ${lock}, or ask the owner to reopen that period.`);
+}
 function log(text, refs = {}) { Repo.insert('events', { id: Repo.nextId('EVT'), at: Clock.now(), by: refs.by || activityBy(), text, ...refs }); }
 
 /* ---------- Lookups ---------- */
@@ -552,7 +558,7 @@ const Commands = {
       }
       const out = driverCash(driverId).outstanding;
       if (total > out + 0.001) fail(`Handover total ${money(total)} exceeds ${dr.name}'s outstanding cash of ${money(out)} (approved expenses and refunds already reduce it).`);
-      const when = at || Clock.now(), id = 'HO-' + Repo.nextId('HO', 701);
+      const when = at || Clock.now(), id = 'HO-' + Repo.nextId('HO', 701); assertOpen(when, 'This handover');
       Repo.insert('handovers', { id, driverId, ref, at: when, receivedBy: receivedBy.trim(), amount: total, declared: declared ? round2(declared) : total, note: note || '', by: activityBy() });
       for (const a of allocations) { const d = Repo.get('deliveries', a.deliveryId); Repo.insert('handoverAllocs', { id: `${id}-${a.deliveryId}`, handoverId: id, deliveryId: a.deliveryId, orderId: d.orderId, driverId, amount: round2(a.amount) }); }
       log(`Cash handover ${ref}: ${money(total)} received by ${receivedBy.trim()} across ${allocations.length} deliver${allocations.length > 1 ? 'ies' : 'y'}`, { driverId });
@@ -600,7 +606,7 @@ const Commands = {
         if (seen.has(a.deliveryId)) fail(`${a.deliveryId} appears twice.`); seen.add(a.deliveryId);
         const d = Repo.get('deliveries', a.deliveryId); if (!d || d.carrierKey !== carrierKey('courier', courierId)) fail(`${a.deliveryId} does not belong to ${cr.name}.`);
       }
-      const id = 'ST-' + Repo.nextId('ST', 901), net = sum(allocations, a => a.net);
+      const id = 'ST-' + Repo.nextId('ST', 901), net = sum(allocations, a => a.net); assertOpen(at, 'This settlement');
       Repo.insert('settlements', { id, courierId, ref, at: at || Clock.now(), net, note: note || '', by: activityBy() });
       for (const a of allocations) { const d = Repo.get('deliveries', a.deliveryId); Repo.insert('settlementAllocs', { id: `${id}-${a.deliveryId}`, settlementId: id, deliveryId: a.deliveryId, orderId: d.orderId, net: round2(a.net) }); log(`Courier settlement ${ref}: net ${money(a.net)}`, { orderId: d.orderId, deliveryId: d.id }); }
       return id;
@@ -840,19 +846,21 @@ const Commands = {
       amount = round2(amount); if (!amount) fail('Enter a non-zero amount. Use a negative amount for a correction.');
       const c = Repo.get('campaigns', campaignId); if (!c) fail('Unknown campaign.');
       if (campaignSpend(c) + amount < 0) fail('A correction cannot take total spend below zero.');
+      assertOpen(at, 'This spend');
       Repo.insert('spend', { id: 'SP-' + Repo.nextId('SP', 1), campaignId, amount, at: at || Clock.now(), note: note || '', by: activityBy() });
-      log(`Spend recorded on ${c.name}: ${money(amount)}`, {});
+      log(`Spend recorded on ${c.name}: ${money(amount)}`, { audience: 'finance' });
     });
   },
   addExpense({ name, category, amount, at }) {
     return Repo.tx(() => {
       amount = round2(amount); if (!(amount > 0)) fail('Amount must be positive.');
       if (!name?.trim()) fail('Enter a description.');
+      assertOpen(at, 'This expense');
       Repo.insert('expenses', { id: 'EXP-' + Repo.nextId('EXP', 1), name: name.trim(), category, amount, at: at || Clock.now(), by: activityBy() });
-      log(`Operating expense: ${name.trim()} ${money(amount)}`, {});
+      log(`Operating expense: ${name.trim()} ${money(amount)}`, { audience: 'finance' });
     });
   },
-  removeExpense(id) { return Repo.tx(() => { const e = Repo.get('expenses', id); Repo.remove('expenses', e); log(`Operating expense removed: ${e.name} ${money(e.amount)}`, {}); }); },
+  removeExpense(id) { return Repo.tx(() => { const e = Repo.get('expenses', id); if (!e) fail('That expense no longer exists.'); assertOpen(e.at, 'This expense'); Repo.remove('expenses', e); log(`Operating expense removed: ${e.name} ${money(e.amount)}`, { audience: 'finance' }); }); },
 
   /* CARRIERS */
   saveDriver(f) {
@@ -881,6 +889,32 @@ const Commands = {
       Repo.insert('couriers', { id, ...row }); log(`Courier ${row.name} added`, {}); return id;
     });
   },
+  /* PERIOD CLOSING. Every figure is dated, so a closed period stays fixed once no
+     entry dated inside it can be added or removed. The closing figures are kept so
+     the integrity check can prove they never changed. */
+  closePeriod(through) {
+    return Repo.tx(() => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(through || '') || isNaN(new Date(through + 'T12:00:00Z'))) fail('Choose the last day to close.');
+      const today = dateKey(Clock.now()), lock = lockedThrough();
+      if (through >= today) fail(`You can only close days that have ended. Choose a date before ${today}.`);
+      if (lock && through <= lock) fail(`The books are already closed through ${lock}. Choose a later date.`);
+      const t = totals({ to: through });
+      const figures = { revenue: t.revenue, cogs: t.cogs, delivery: t.delivery, fees: t.fees, marketing: t.marketing, opex: t.opex, driverexp: t.driverexp, profit: t.profit, collected: t.collected, bizcash: t.bizcash };
+      setSettings({ lockedThrough: through, periodLog: [...(S().periodLog || []), { kind: 'close', through, at: Clock.now(), by: activityBy(), figures }] });
+      log(`Books closed through ${through}`, {});
+      return through;
+    });
+  },
+  reopenPeriod(through, reason) {
+    return Repo.tx(() => {
+      const lock = lockedThrough(); if (!lock) fail('No period is closed.');
+      if (!reason?.trim()) fail('Record why the period is being reopened.');
+      through = through || null;
+      if (through && (!/^\d{4}-\d{2}-\d{2}$/.test(through) || through >= lock)) fail(`Choose a date before ${lock}, or leave it empty to reopen everything.`);
+      setSettings({ lockedThrough: through, periodLog: [...(S().periodLog || []), { kind: 'reopen', through, from: lock, at: Clock.now(), by: activityBy(), reason: reason.trim() }] });
+      log(`Books reopened: ${through ? `now closed through ${through}` : 'no period closed'} (was ${lock}). Reason: ${reason.trim()}`, {});
+    });
+  },
   saveSettings(patch) {
     return Repo.tx(() => {
       const before = Repo.data.settings; Repo.data.settings = { ...before, ...patch };
@@ -889,6 +923,19 @@ const Commands = {
     });
   },
 };
+
+function setSettings(patch) {
+  const before = Repo.data.settings; Repo.data.settings = { ...before, ...patch };
+  if (Repo.undo) Repo.undo.push(() => { Repo.data.settings = before; });
+  Repo.touch();
+}
+/* The figures recorded when the latest period was closed, compared with today's figures for the same dates. */
+function closingCheck() {
+  const lock = lockedThrough(), last = [...(S()?.periodLog || [])].reverse().find(x => x.kind === 'close' && x.through === lock && x.figures);
+  if (!lock || !last) return null;
+  const t = totals({ to: lock }), diffs = Object.keys(last.figures).filter(k => Math.abs(round2(t[k] - last.figures[k])) >= 0.01);
+  return { through: lock, closedAt: last.at, by: last.by, figures: last.figures, now: t, diffs };
+}
 
 /* Display money for validation messages. UI uses the same function. */
 const _nf = new Intl.NumberFormat('en-EG', { maximumFractionDigits: 2 });
@@ -944,6 +991,7 @@ function integrity() {
   check('Orders with more than one active delivery', onePerOrder, 0);
   const neg = Repo.all('skus').filter(s => stockOnHand(s.id) < 0).length + Repo.all('materials').filter(m => stockOnHand(m.id) < -1e-6).length;
   check('Items with negative stock', neg, 0);
+  const cc = closingCheck(); if (cc) check(`Closed books through ${cc.through} still match their closing figures`, cc.diffs.length, 0);
   let lineBad = 0; for (const l of Repo.all('lines')) if (l.delivered + l.undeliveredBack > l.dispatched || l.returned > l.delivered || l.reserved > l.qty) lineBad++;
   check('Line quantities outside their limits', lineBad, 0);
   const keys = new Set(); let dupKeys = 0; for (const m of Repo.all('movements')) if (m.key) { if (keys.has(m.key)) dupKeys++; keys.add(m.key); }
@@ -953,4 +1001,4 @@ function integrity() {
   return out;
 }
 
-export { ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };
+export { assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };

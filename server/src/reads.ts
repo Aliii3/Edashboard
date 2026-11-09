@@ -1,22 +1,34 @@
 /* Read endpoints for the browser: a paged first load, then only what changed. */
-import { carrierKey } from '@commerce-os/domain';
+import { carrierKey, seesCosts, canReadTable, redactRow, redactSettings } from '@commerce-os/domain';
 import { pool, withTx, selectRows, readWorkspace, colList, q, snake, fromDb, idParam, TABLES, ensureColumns, type Client } from './db.ts';
 import type { User } from './store.ts';
 
 const PAGE_BYTES = 3_000_000;   // stays well under Vercel's 4.5 MB response limit
-export async function version() {
+export async function version(user: User) {
   await ensureColumns();
   const w = await readWorkspace(pool);
-  return { v: Number(w.version), schema: w.schema, settings: w.settings, roadmap: w.roadmap };
+  return { v: Number(w.version), schema: w.schema, settings: redactSettings(user.role, w.settings), roadmap: w.roadmap };
+}
+/* A command's changes, cut down to what this role may read. */
+export function redactDelta(user: User, delta: { v: number; changes: { t: string; op: string; row: any }[]; meta: any }) {
+  if (seesCosts(user.role)) return delta;
+  const changes = [];
+  for (const c of delta.changes) {
+    if (c.op === 'delete') { if (canReadTable(user.role, c.t)) changes.push(c); continue; }
+    const row = redactRow(user.role, c.t, c.row); if (row) changes.push({ ...c, row });
+  }
+  return { v: delta.v, changes, meta: { ...delta.meta, settings: redactSettings(user.role, delta.meta.settings) } };
 }
 /* One page of one table, sized by bytes, ordered by insertion. Returns JSON text. */
-export async function snapshotPage(table: string, after: number) {
+export async function snapshotPage(table: string, after: number, user: User) {
   if (!TABLES.includes(table)) return null;
+  if (!canReadTable(user.role, table)) return '{"rows":[],"next":null}';
   await ensureColumns();
-  const r = await pool.query(`SELECT "_seq", ${colList(table)} FROM ${q(snake(table))} WHERE "_seq" > $1 ORDER BY "_seq" LIMIT 4000`, [after]);
+  const hideFinance = table === 'events' && !seesCosts(user.role) ? ` AND audience IS DISTINCT FROM 'finance'` : '';
+  const r = await pool.query(`SELECT "_seq", ${colList(table)} FROM ${q(snake(table))} WHERE "_seq" > $1${hideFinance} ORDER BY "_seq" LIMIT 4000`, [after]);
   let size = 0, next: number | null = null; const parts: string[] = [];
   for (const row of r.rows) {
-    const s = JSON.stringify(fromDb(row));
+    const s = JSON.stringify(redactRow(user.role, table, fromDb(row)));
     if (size + s.length > PAGE_BYTES && parts.length) { next = Number(row._seq) - 1; break; }
     parts.push(s); size += s.length + 1;
   }
@@ -41,8 +53,8 @@ export async function driverSnapshot(user: User) {
     tables.customers = (await selectRows(c, 'customers', 'id = ANY($1)', [custIds])).map(x => ({ id: x.id, name: x.name, phone: x.phone, area: x.area, address: x.address, deliveryNotes: x.deliveryNotes, tags: [] }));
     tables.driverExpenses = await selectRows(c, 'driverExpenses', 'driver_id=$1', [user.driverId]);
     tables.discrepancies = await selectRows(c, 'discrepancies', 'carrier_key=$1', [key]);
-    tables.events = (await c.query(`SELECT ${colList('events')} FROM events WHERE driver_id=$1 ORDER BY "_seq" DESC LIMIT 300`, [user.driverId])).rows.map(fromDb).reverse();
-    return { version: Number(w.version), schema: w.schema, seq: {}, settings: w.settings, roadmap: {}, tables };
+    tables.events = (await c.query(`SELECT ${colList('events')} FROM events WHERE driver_id=$1 AND audience IS DISTINCT FROM 'finance' ORDER BY "_seq" DESC LIMIT 300`, [user.driverId])).rows.map(fromDb).reverse();
+    return { version: Number(w.version), schema: w.schema, seq: {}, settings: redactSettings('driver', w.settings), roadmap: {}, tables };
   }, 'REPEATABLE READ');
 }
 /* Everything that changed after `since`, read from one consistent view of the database. */
@@ -58,9 +70,12 @@ export async function changesSince(since: number, user: User) {
     const last = new Map<string, any>(); for (const r of log) { const k = r.t + ':' + r.row_id; last.delete(k); last.set(k, r); }
     const want: Record<string, string[]> = {};
     const out: any[] = [];
-    for (const r of last.values()) if (r.op === 'delete') out.push({ t: r.t, op: 'delete', row: { id: idParam(r.t, [r.row_id])[0] } }); else (want[r.t] ??= []).push(r.row_id);
-    for (const t in want) for (const row of await selectRows(c, t, 'id = ANY($1)', [idParam(t, want[t])])) out.push({ t, op: 'upsert', row });
-    return { v, changes: out, meta: { settings: w.settings, roadmap: w.roadmap } };
+    for (const r of last.values()) {
+      if (!canReadTable(user.role, r.t)) continue;
+      if (r.op === 'delete') out.push({ t: r.t, op: 'delete', row: { id: idParam(r.t, [r.row_id])[0] } }); else (want[r.t] ??= []).push(r.row_id);
+    }
+    for (const t in want) for (const row of await selectRows(c, t, 'id = ANY($1)', [idParam(t, want[t])])) { const x = redactRow(user.role, t, row); if (x) out.push({ t, op: 'upsert', row: x }); }
+    return { v, changes: out, meta: { settings: redactSettings(user.role, w.settings), roadmap: w.roadmap } };
   }, 'REPEATABLE READ');
 }
 /* Streams a full backup table by table, so its size isn't limited by one response. */

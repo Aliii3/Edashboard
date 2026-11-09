@@ -13,6 +13,7 @@ export const COMMAND_ROLES = {
   saveCustomer: [OPS], setCustomerTags: [OPS], logContact: [OPS, FIN],
   saveCampaign: [FIN], addSpend: [FIN], addExpense: [FIN], removeExpense: [FIN],
   saveDriver: [OPS], setAvailability: [OPS], saveCourier: [], saveSettings: [], setRoadmap: [],
+  closePeriod: [FIN], reopenPeriod: [],
 };
 /* The owner may run everything in the table. Anything not in the table can't be called at all. */
 export const canRun = (role, command) => Object.hasOwn(COMMAND_ROLES, command) && (role === 'owner' || COMMAND_ROLES[command].includes(role));
@@ -20,8 +21,33 @@ export const canRun = (role, command) => Object.hasOwn(COMMAND_ROLES, command) &
 export const DRIVER_SCOPE = { setDeliveryStatus: 'delivery', deliver: 'delivery', collect: 'delivery', startReturn: 'delivery', addDriverExpense: 'driverField' };
 export const ROLE_SCREENS = {
   owner: ['overview', 'orders', 'order360', 'crm', 'inventory', 'shipping', 'driver', 'finance', 'campaigns', 'settings', 'roadmap'],
-  operations: ['overview', 'orders', 'order360', 'crm', 'inventory', 'shipping', 'driver', 'campaigns'],
+  operations: ['overview', 'orders', 'order360', 'crm', 'inventory', 'shipping', 'driver'],
   warehouse: ['orders', 'order360', 'inventory', 'shipping', 'driver'],
   finance: ['overview', 'orders', 'order360', 'crm', 'driver', 'shipping', 'finance', 'campaigns'],
   driver: ['driver'],
 };
+
+/* What each role may read. The server removes everything else before data leaves
+   the database, so hidden figures never reach the browser.
+   Owner and finance see costs and profit. Operations and warehouse see prices and
+   collections, but not product costs, profit, campaign spend or company expenses.
+   Warehouse also doesn't see the customer contact log. Drivers get their own
+   deliveries only (see the driver snapshot on the server). */
+export const COST_ROLES = ['owner', 'finance'];
+export const seesCosts = role => COST_ROLES.includes(role);
+const COST_FIELDS = { lines: ['unitCost'], materials: ['cost'], boms: ['labor', 'overhead'], production: ['unitCost'], campaigns: ['budget', 'reportedRoas'] };
+const HIDDEN_TABLES = { operations: ['spend', 'expenses'], warehouse: ['spend', 'expenses', 'contacts'], driver: ['spend', 'expenses', 'contacts', 'settlements', 'settlementAllocs', 'campaigns', 'materials', 'boms', 'production', 'movements', 'couriers'] };
+export const canReadTable = (role, table) => !(HIDDEN_TABLES[role] || []).includes(table);
+/* Returns the row as this role may see it, or null when the role may not see it at all. */
+export function redactRow(role, table, row) {
+  if (seesCosts(role)) return row;
+  if (!canReadTable(role, table)) return null;
+  if (table === 'events' && row.audience === 'finance') return null;
+  const f = COST_FIELDS[table]; if (!f) return row;
+  const r = { ...row }; for (const k of f) if (k in r) r[k] = 0; return r;
+}
+/* Closing figures include profit, so only cost roles receive them. */
+export function redactSettings(role, settings) {
+  if (seesCosts(role) || !settings?.periodLog) return settings;
+  return { ...settings, periodLog: settings.periodLog.map(({ figures, ...x }) => x) };
+}

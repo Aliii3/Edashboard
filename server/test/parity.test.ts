@@ -62,6 +62,10 @@ function nextOp(r: () => number, step: number): [string, any[]] {
     () => { const x = any(Repo.all('discrepancies').filter((d: any) => d.status === 'Open')); return x && ['resolveDiscrepancy', [x.id, 'paid later']]; },
     () => { const o = any(orders.filter((x: any) => ['Delivered', 'Returned'].includes(x.status))); return o && ['confirmOrder', [o.id]]; },
     () => { const d = any(dels.filter((x: any) => TERMINAL_DELIVERY.has(x.status))); return d && ['pickup', [d.id]]; },
+    () => r() < .3 && ['closePeriod', [D.dateKey(new Date(Date.parse(Clock.now()) - (1 + Math.floor(r() * 6)) * 864e5).toISOString())]],
+    () => r() < .3 && ['reopenPeriod', [null, r() < .8 ? 'Correction' : '']],
+    () => ['addExpense', [{ name: 'Parity ' + step, category: 'Rent', amount: 30, at: new Date(Date.parse(Clock.now()) - Math.floor(r() * 8) * 864e5).toISOString() }]],
+    () => { const e = any(Repo.all('expenses')); return e && ['removeExpense', [e.id]]; },
   ];
   for (let i = 0; i < 30; i++) { const op = pick(r, choices)(); if (op) return op; }
   return ['addSpend', [{ campaignId: Repo.all('campaigns')[0].id, amount: 10 }]];

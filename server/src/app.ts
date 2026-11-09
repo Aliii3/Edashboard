@@ -9,7 +9,7 @@ import { Rule, ROLES } from '@commerce-os/domain';
 import { pool, ensureColumns, migrateDb, describeDbError } from './db.ts';
 import { COOKIE, SESSION_DAYS, createSession, destroySession, destroyUserSessions, userFromToken, hashPassword, checkPassword, validPassword, dummyHash, tooManyAttempts, recordFailure, ensureAdmin } from './auth.ts';
 import { Forbidden, runCommand, resetDemo, loadTest, restore, ensureWorkspace, type User } from './store.ts';
-import { version, snapshotPage, driverSnapshot, changesSince, backupChunks } from './reads.ts';
+import { version, snapshotPage, driverSnapshot, changesSince, backupChunks, redactDelta } from './reads.ts';
 
 declare module 'fastify' { interface FastifyRequest { user: User | null } }
 /* Demo data tools: on outside production, or when DEMO_TOOLS=1 (for example on a preview deployment). */
@@ -91,9 +91,9 @@ export async function buildApp({ serveStatic = false } = {}) {
   });
 
   /* Sync */
-  app.get('/api/version', { preHandler: auth }, async () => version());
+  app.get('/api/version', { preHandler: auth }, async req => version(req.user!));
   app.get<{ Querystring: { table?: string; after?: string } }>('/api/snapshot', { preHandler: staff }, async (req, reply) => {
-    const body = await snapshotPage(String(req.query.table), Number(req.query.after) || 0);
+    const body = await snapshotPage(String(req.query.table), Number(req.query.after) || 0, req.user!);
     return body === null ? reply.code(400).send({ error: 'Unknown table.' }) : reply.type('application/json').send(body);
   });
   app.get('/api/snapshot/mine', { preHandler: auth }, async (req, reply) => req.user!.role === 'driver' ? driverSnapshot(req.user!) : reply.code(400).send({ error: 'Staff load the workspace with /api/snapshot.' }));
@@ -102,7 +102,7 @@ export async function buildApp({ serveStatic = false } = {}) {
     const { args } = (req.body || {}) as any;
     if (!Array.isArray(args)) return reply.code(400).send({ error: 'Invalid request.' });
     const { result, delta } = await runCommand(req.user!, req.params.name, args);
-    return req.user!.role === 'driver' ? { result, resync: true, v: delta.v } : { result, delta };
+    return req.user!.role === 'driver' ? { result, resync: true, v: delta.v } : { result, delta: redactDelta(req.user!, delta) };
   });
 
   /* Team */
