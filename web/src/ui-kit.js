@@ -144,7 +144,8 @@ function filteredOrders(f = ui.orders) {
   });
 }
 /* ---------- Chart: one axis, thin lines, crosshair tooltip, legend + direct labels ---------- */
-const CHART_COLORS = ['#923c20', '#1f74b4', '#c08a1e'];
+/* Checked on white: lightness band, colorblind separation and contrast. */
+const CHART_COLORS = ['#3b5bfd', '#0ea472', '#f76707'];
 const _charts = {};
 function lineChart(id, buckets, series, unitLabel) {
   const W = 760, H = 260, L = 62, R = 96, T = 14, B = 30, max = Math.max(1, ...series.flatMap(s => s.values)), min = Math.min(0, ...series.flatMap(s => s.values));
