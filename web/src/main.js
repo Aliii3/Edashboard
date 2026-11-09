@@ -27,15 +27,37 @@ function render() {
   const navPage = ui.route.page === 'driver' ? 'shipping' : ui.route.page;
   document.getElementById('workspaceName').textContent = S().company;
   document.getElementById('nav').innerHTML = Session.isDriver ? `<a href="${home()}" class="active" aria-current="page">${icon('shipping')}<span class="nav-title">My deliveries</span></a>` : NAV.filter(([p]) => Session.canSee(p)).map(([p, name]) => `<a href="#/${p}" title="${name}" aria-label="${name}" class="${navPage === p ? 'active' : ''}" ${navPage === p ? 'aria-current="page"' : ''}>${icon(p)}<span class="nav-title">${name}</span></a>`).join('');
+  placeNavPill(document.getElementById('nav'));
   const a = document.activeElement, focusId = a && a.id && a.id.startsWith('s-') ? a.id : null, caret = focusId ? a.selectionStart : 0;
   const main = document.getElementById('main'), openEx = [...main.querySelectorAll('details[open]')].length;
   main.innerHTML = VIEWS[ui.route.page]() + `<div class="footerhint">${esc(Session.user.name)} · ${esc(Session.user.role)} · ${Session.online ? 'Connected' : 'Reconnecting…'} · No live integrations, messages or payments.</div>`;
   if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch { /* not a text input */ } } }
   void openEx;
 }
+/* The tab highlight slides to the new tab. The edge moving toward it leads and the other
+   edge catches up, so the highlight stretches and settles. */
+let _pill = null;
+const EASE_OUT = 'cubic-bezier(.215,.61,.355,1)', EASE_IN_OUT = 'cubic-bezier(.645,.045,.355,1)';
+function placeNavPill(nav) {
+  const a = nav.querySelector('a.active'); if (!a) { _pill = null; return; }
+  const l = a.offsetLeft, r = nav.scrollWidth - (a.offsetLeft + a.offsetWidth);
+  let pill = nav.querySelector('.nav-pill');
+  const fresh = !pill; if (fresh) { pill = document.createElement('span'); pill.className = 'nav-pill'; pill.setAttribute('aria-hidden', 'true'); nav.prepend(pill); }
+  nav.classList.add('has-pill');
+  const set = (x, y) => { pill.style.setProperty('--l', x + 'px'); pill.style.setProperty('--r', y + 'px'); };
+  const from = _pill; _pill = { l, r };
+  if (!from || (from.l === l && from.r === r)) { pill.style.transition = 'none'; set(l, r); return; }
+  if (fresh) { pill.style.transition = 'none'; set(from.l, from.r); void pill.offsetWidth; }
+  const right = l > from.l;
+  pill.style.transition = '';
+  pill.style.setProperty('--dl', right ? '.55s' : '.36s'); pill.style.setProperty('--el', right ? EASE_IN_OUT : EASE_OUT);
+  pill.style.setProperty('--dr', right ? '.36s' : '.55s'); pill.style.setProperty('--er', right ? EASE_OUT : EASE_IN_OUT);
+  set(l, r);
+}
 function queueRender() { if (_renderQueued) return; _renderQueued = true; requestAnimationFrame(() => { _renderQueued = false; render(); }); }
 function bindEvents() {
   window.addEventListener('hashchange', () => { closeModal(); render(); window.scrollTo(0, 0); });
+  window.addEventListener('resize', () => { const nav = document.getElementById('nav'); if (nav && !nav.closest('[hidden]')) { _pill = null; placeNavPill(nav); } });
   document.addEventListener('click', e => {
     const close = e.target.closest('[data-close]'); if (close) return closeModal();
     const rm = e.target.closest('[data-dl-rm]'); if (rm) { orderDraft.splice(Number(rm.dataset.dlRm), 1); return renderDraftLines(); }

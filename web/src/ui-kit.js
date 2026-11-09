@@ -144,7 +144,8 @@ function filteredOrders(f = ui.orders) {
   });
 }
 /* ---------- Chart: one axis, thin lines, crosshair tooltip, legend + direct labels ---------- */
-const CHART_COLORS = ['#923c20', '#1f74b4', '#c08a1e'];
+/* Checked for the dark surface: lightness band, colorblind separation and contrast. */
+const CHART_COLORS = ['#7f9f1a', '#3a86cc', '#d05f3a'];
 const _charts = {};
 function lineChart(id, buckets, series, unitLabel) {
   const W = 760, H = 260, L = 62, R = 96, T = 14, B = 30, max = Math.max(1, ...series.flatMap(s => s.values)), min = Math.min(0, ...series.flatMap(s => s.values));
@@ -160,7 +161,7 @@ function lineChart(id, buckets, series, unitLabel) {
   const labels = ends.map(e => `<text x="${W - R + 8}" y="${e.y + 4}" class="endl">${esc(series[e.i].short)}</text>`).join('');
   _charts[id] = { buckets, series, x: buckets.map((_, i) => x(i)), W, H, L, R, T, B, y: series.map(s => s.values.map(y)) };
   return `<div class="legend">${series.map((s, i) => `<span><b style="background:${CHART_COLORS[i]}"></b>${esc(s.name)}</span>`).join('')}</div>
-  <div class="chart" data-chart="${id}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(unitLabel)} by period for ${series.map(s => s.name).join(', ')}. The same figures are in the table below.">${g}${xl}${lines}${labels}<g class="hover" style="display:none"><line class="ch" y1="${T}" y2="${H - B}"/>${series.map((_, i) => `<circle r="4.5" fill="${CHART_COLORS[i]}" stroke="#fff" stroke-width="2"/>`).join('')}</g></svg><div class="tip" hidden></div></div>
+  <div class="chart" data-chart="${id}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(unitLabel)} by period for ${series.map(s => s.name).join(', ')}. The same figures are in the table below.">${g}${xl}${lines}${labels}<g class="hover" style="display:none"><line class="ch" y1="${T}" y2="${H - B}"/>${series.map((_, i) => `<circle r="4.5" fill="${CHART_COLORS[i]}" stroke="#1c1d20" stroke-width="2"/>`).join('')}</g></svg><div class="tip" hidden></div></div>
   <details class="tv"><summary>View as table</summary>${simpleTable(['Period', ...series.map(s => s.name)], buckets.map((b, i) => `<tr><td>${esc(b.label)}</td>${series.map(s => `<td>${m(s.values[i])}</td>`).join('')}</tr>`))}</details>`;
 }
 function chartHover(e) {
