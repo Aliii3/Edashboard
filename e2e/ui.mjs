@@ -3,7 +3,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  const b=await chromium.launch(chrome?{executablePath:chrome}:{});const ctx=await b.newContext({viewport:{width:1440,height:900},acceptDownloads:true});const p=await ctx.newPage();
  const errs=[];p.on('pageerror',e=>errs.push('PAGE '+e.message));p.on('console',m=>{if(m.type()==='error'){if(!/status of (401|422|403)/.test(m.text()))errs.push('CONSOLE '+m.text())}});
  const rawWait=p.waitForTimeout.bind(p);p.waitForTimeout=ms=>rawWait(ms+120);
- const signIn=async(pg,email)=>{await pg.goto(URL);await pg.waitForSelector('#loginForm');await pg.fill('input[name=email]',email);await pg.fill('input[name=password]',PW);await pg.click('#loginForm button');await pg.waitForFunction(()=>document.querySelector('#main .heading'))};
+ const signIn=async(pg,email)=>{await pg.goto(URL);await pg.waitForSelector('#loginForm');await pg.fill('input[name=email]',email);await pg.fill('input[name=password]',PW);await pg.click('#loginForm button');await pg.waitForFunction(()=>document.querySelector('#main :is(.heading,.hero)'))};
  await p.goto(URL);await p.waitForSelector('#loginForm');await p.fill('input[name=email]','owner@nilestudio.example');await p.fill('input[name=password]','wrong-password');await p.click('#loginForm button');await p.waitForSelector('#loginError:not(:empty)');
  await signIn(p,'owner@nilestudio.example');await shot0();
  let pass=0,fail=0;const ok=(n,c,x='')=>{if(c)pass++;else{fail++;console.log('FAIL',n,x)}};
@@ -70,7 +70,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  // financial explain
  await p.locator('details.ex summary').first().click();ok('explain opens',(await p.locator('details.ex[open] .ex-body').first().innerText()).length>10);
  // persistence
- await p.waitForTimeout(500);await p.reload();await p.waitForFunction(()=>window.Repo&&document.querySelector('#main .heading'));ok('persisted',await ev(`orderOf(${oid}).status`)==='Partially Returned',await ev(`orderOf(${oid})?.status`));
+ await p.waitForTimeout(500);await p.reload();await p.waitForFunction(()=>window.Repo&&document.querySelector('#main :is(.heading,.hero)'));ok('persisted',await ev(`orderOf(${oid}).status`)==='Partially Returned',await ev(`orderOf(${oid})?.status`));
  // orders: filters, sort, search, csv export
  await go('#/orders');await p.selectOption('[data-f="orders.status"]','Delivered');await p.waitForTimeout(60);const cnt=await ev(()=>filteredOrders().length);ok('filter',cnt>0&&await ev(()=>filteredOrders().every(o=>o.status==='Delivered')));
  const [dl]=await Promise.all([p.waitForEvent('download'),clickBtn('Export filtered CSV')]);const csv=fs.readFileSync(await dl.path(),'utf8');ok('csv rows',csv.trim().split('\r\n').length===cnt+1);
@@ -120,7 +120,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  await p.click('#accountBtn');await p.waitForSelector('dialog[open]');await p.locator('dialog button',{hasText:'Sign out'}).click();await p.waitForSelector('#loginForm');ok('signed out',(await p.request.get(URL+'api/me')).status()===401);await signIn(p,'owner@nilestudio.example');
  // scale
  const lt=await p.evaluate(async()=>{const r=await fetch('/api/admin/load-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orders:5000})});return r.json()});console.log('5k load test: generate + save to PostgreSQL',Math.round(lt.totalMs),'ms');ok('load test ran',lt.orders>5000,JSON.stringify(lt).slice(0,200));
- const t1=Date.now();await p.reload();await p.waitForFunction(()=>window.Repo&&Repo.data&&Repo.all('orders').length>5000&&document.querySelector('#main .heading'),null,{timeout:60000});console.log('page load with 5k orders (paged download)',Date.now()-t1,'ms');
+ const t1=Date.now();await p.reload();await p.waitForFunction(()=>window.Repo&&Repo.data&&Repo.all('orders').length>5000&&document.querySelector('#main :is(.heading,.hero)'),null,{timeout:60000});console.log('page load with 5k orders (paged download)',Date.now()-t1,'ms');
  const timing=async(h)=>ev2(h);const ev2=h=>p.evaluate(h=>{location.hash=h;Repo.touch();const t=performance.now();render();return performance.now()-t},h);
  for(const h of ['#/overview','#/orders','#/crm','#/shipping','#/finance','#/campaigns','#/drivers/DRV-1']){console.log(h,Math.round(await timing(h)),'ms')}
  const badL=await ev(()=>integrity().filter(x=>!x.ok));ok('integrity at scale',!badL.length,JSON.stringify(badL));

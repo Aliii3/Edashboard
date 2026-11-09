@@ -25,7 +25,7 @@ await cmd(PORT, 'saveCourier', { name: 'Test Courier', shipRate: 50, returnRate:
 
 const res = await fetch(base + '/'); ok('web app served with security headers', res.status === 200 && !!res.headers.get('content-security-policy'));
 await p.context().addCookies([{ name: 'cos_session', value: cookie.split('=')[1], domain: 'localhost', path: '/', secure: false }]);
-await p.goto(base + '/'); await p.waitForSelector('#main .heading');
+await p.goto(base + '/'); await p.waitForSelector('#main :is(.heading,.hero)');
 for (const n of ['overview', 'orders', 'order360', 'crm', 'inventory', 'shipping', 'finance', 'campaigns', 'settings', 'roadmap']) { await p.evaluate(h => { location.hash = h; }, '#/' + n); await p.waitForTimeout(120); ok('empty screen opens: ' + n, (await p.locator('#main').innerText()).length > 5); for (const t of await p.locator('.tabs button').all()) { await t.click(); await p.waitForTimeout(40); } }
 ok('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 /* Two server instances on one database: concurrent changes are applied exactly once. */

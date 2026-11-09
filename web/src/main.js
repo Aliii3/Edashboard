@@ -2,7 +2,7 @@ import { Commands, Session, request, loadSnapshot, startSync, stopSync } from '.
 import './styles.css';
 import { Repo, esc } from '@commerce-os/domain';
 import { S } from '@commerce-os/domain';
-import { NAV, card, chartHover, icon, initials, pad, setPath, ui } from './ui-kit.js';
+import { LOGO, NAV, card, chartHover, icon, iconBtn, initials, pad, setPath, ui } from './ui-kit.js';
 import { order360, ordersView, overview } from './views-core.js';
 import { crmView, driverProfile, inventoryView, shippingView } from './views-ops.js';
 import { campaignsView, financeView, roadmapView, settingsView } from './views-biz.js';
@@ -104,19 +104,28 @@ function bindEvents() {
   document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); input.focus(); } if (e.key === 'Escape') box.hidden = true; });
 }
 function loginView() {
-  document.getElementById('header').hidden = true; document.getElementById('dock').hidden = true;
-  document.getElementById('main').innerHTML = `<div class="login"><form id="loginForm" class="card"><div class="pad"><span class="logo-mark" aria-hidden="true">c<span>o</span></span><h1>Sign in to Commerce OS</h1><label class="field mt">Email<input name="email" type="email" required autocomplete="username"></label><label class="field mt">Password<input name="password" type="password" required autocomplete="current-password"></label><p id="loginError" class="form-error" role="alert"></p><button class="primary mt" style="width:100%">Sign in</button></div></form></div>`;
+  document.getElementById('header').hidden = true; document.getElementById('dock').hidden = true; document.getElementById('rail').hidden = true;
+  document.getElementById('main').innerHTML = `<div class="login"><form id="loginForm" class="card"><div class="pad"><span class="logo-mark" aria-hidden="true">${LOGO(44)}</span><h1>Sign in to Commerce OS</h1><label class="field mt">Email<input name="email" type="email" required autocomplete="username"></label><label class="field mt">Password<input name="password" type="password" required autocomplete="current-password"></label><p id="loginError" class="form-error" role="alert"></p><button class="primary mt" style="width:100%">Sign in</button></div></form></div>`;
   document.getElementById('loginForm').addEventListener('submit', async e => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
     try { const r = await request('/api/auth/login', { method: 'POST', body: f }); Session.user = r.user; await enter(); }
     catch (err) { document.getElementById('loginError').textContent = err.message; }
   });
 }
+/* Side bar and header buttons: shortcuts to the things people do most, shown only when the role can do them. */
+function renderChrome() {
+  document.getElementById('logoMark').innerHTML = LOGO(32);
+  const rail = document.getElementById('rail'), link = (page, ic, label) => Session.canSee(page) ? `<a class="iconbtn" href="#/${page}" aria-label="${label}" title="${label}">${icon(ic)}</a>` : '';
+  rail.hidden = Session.isDriver;
+  rail.innerHTML = Session.isDriver ? '' : [iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)'), iconBtn('plus', 'newOrder', undefined, 'New order'), iconBtn('upload', 'importModal', undefined, 'Import orders from CSV'), iconBtn('download', 'exportOrders', undefined, 'Export orders as CSV'), '<span class="rail-gap"></span>', link('orders', 'orders', 'Orders'), link('shipping', 'truck', 'Shipping'), link('finance', 'finance', 'Finance'), '<span class="rail-gap"></span>', link('roadmap', 'roadmap', 'Roadmap'), link('settings', 'settings', 'Settings')].join('');
+  document.getElementById('topActions').innerHTML = (Session.isDriver ? '' : iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)')) + iconBtn('refresh', 'syncNow', undefined, 'Get the latest changes');
+}
 async function enter() {
   Session.onProgress = (i, n) => { const el = document.getElementById('main'); if (el && !Repo.data) el.innerHTML = `<p class="empty">Loading workspace… ${Math.round(i / n * 100)}%</p>`; };
   await loadSnapshot(); startSync();
   document.getElementById('header').hidden = false; document.getElementById('dock').hidden = Session.isDriver;
   document.getElementById('accountBtn').textContent = initials(Session.user.name);
+  renderChrome();
   if (!location.hash || !allowed(parseRoute())) location.hash = home();
   render();
 }

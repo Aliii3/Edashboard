@@ -1,4 +1,4 @@
-import { Commands, Session, request, loadSnapshot } from './api.js';
+import { Commands, Session, request, loadSnapshot, pull } from './api.js';
 import { ROLES } from '@commerce-os/domain';
 import { Repo, Rule, esc, fail, round2, sum } from '@commerce-os/domain';
 import { AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
@@ -85,10 +85,13 @@ function allocInputsTotal() { return [...document.querySelectorAll('#modalForm [
 const A = {
   /* navigation and table */
   setTab([p, t]) { setPath(p, t); render(); },
+  focusSearch() { const i = document.querySelector('#dock input'); if (i) i.focus(); },
+  async syncNow() { try { await pull(); render(); toast('Up to date.'); } catch (e) { toast(e.message, 'bad'); } },
   sort([id, k]) { const st = ui.tbl[id]; if (st.s === k) st.d *= -1; else { st.s = k; st.d = 1; } st.p = 0; render(); },
   page([id, n]) { ui.tbl[id].p += n; render(); document.querySelector(`.tablewrap`)?.scrollIntoView?.({ block: 'nearest' }); },
   goOrders(f) { ui.orders = { ...blankOrderFilters(), ...f }; if (ui.tbl.orders) ui.tbl.orders.p = 0; location.hash = '#/orders'; render(); },
   goFinance([tab, extra]) { ui.fin.tab = tab; Object.assign(ui.fin, extra || {}); location.hash = '#/finance'; render(); },
+  goInv() { location.hash = '#/inventory'; },
   goShip(tab) { ui.ship.tab = tab; location.hash = '#/shipping'; render(); },
   clearOrders() { ui.orders = blankOrderFilters(); render(); },
   clearOv() { Object.assign(ui.ov, { campaign: '', sku: '', courier: '', driver: '' }); render(); },
