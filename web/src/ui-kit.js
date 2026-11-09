@@ -158,6 +158,25 @@ function filteredOrders(f = ui.orders) {
 /* Checked on white: lightness band, colorblind separation and contrast. */
 const CHART_COLORS = ['#3b5bfd', '#0ea472', '#f76707'];
 const _charts = {};
+/* Monotone cubic curve through the points: smooth, and never overshoots past a real value. */
+function smoothPath(pts) {
+  const n = pts.length; if (n < 3) return pts.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)}`).join('');
+  const d = [], t = [];
+  for (let i = 0; i < n - 1; i++) d.push((pts[i + 1][1] - pts[i][1]) / (pts[i + 1][0] - pts[i][0]));
+  t[0] = d[0]; t[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i++) t[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (d[i] === 0) { t[i] = 0; t[i + 1] = 0; continue; }
+    const a = t[i] / d[i], b = t[i + 1] / d[i], q = a * a + b * b;
+    if (q > 9) { const k = 3 / Math.sqrt(q); t[i] = k * a * d[i]; t[i + 1] = k * b * d[i]; }
+  }
+  let out = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < n - 1; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[i + 1], h = (x1 - x0) / 3;
+    out += `C${(x0 + h).toFixed(1)} ${(y0 + t[i] * h).toFixed(1)} ${(x1 - h).toFixed(1)} ${(y1 - t[i + 1] * h).toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+  }
+  return out;
+}
 function lineChart(id, buckets, series, unitLabel) {
   const W = 760, H = 260, L = 62, R = 96, T = 14, B = 30, max = Math.max(1, ...series.flatMap(s => s.values)), min = Math.min(0, ...series.flatMap(s => s.values));
   const pow = 10 ** Math.floor(Math.log10(Math.max(max - min, 1))), stepTry = [1, 2, 5, 10].map(x => x * pow / 2).find(s => (max - min) / s <= 4.5) || pow * 5, top = Math.ceil(max / stepTry) * stepTry, bot = Math.floor(min / stepTry) * stepTry;
@@ -168,7 +187,9 @@ function lineChart(id, buckets, series, unitLabel) {
   /* Direct labels sit at the line ends, nudged apart if they would collide. */
   const ends = series.map((s, i) => ({ i, name: s.name, y: y(s.values.at(-1) ?? 0) })).sort((a, b) => a.y - b.y);
   for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 14) ends[i].y = ends[i - 1].y + 14;
-  const lines = series.map((s, i) => `<path d="${s.values.map((v, j) => `${j ? 'L' : 'M'}${x(j).toFixed(1)} ${y(v).toFixed(1)}`).join('')}" fill="none" stroke="${CHART_COLORS[i]}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`).join('');
+  const curves = series.map(s => smoothPath(s.values.map((v, j) => [x(j), y(v)])));
+  const base = y(Math.max(bot, 0)), area = curves[0] && buckets.length > 1 ? `<defs><linearGradient id="ga-${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${CHART_COLORS[0]}" stop-opacity=".22"/><stop offset="1" stop-color="${CHART_COLORS[0]}" stop-opacity="0"/></linearGradient></defs><path class="area" d="${curves[0]}L${x(buckets.length - 1).toFixed(1)} ${base.toFixed(1)}L${x(0).toFixed(1)} ${base.toFixed(1)}Z" fill="url(#ga-${id})"/>` : '';
+  const lines = area + series.map((s, i) => `<path class="ln" pathLength="1" d="${curves[i]}" fill="none" stroke="${CHART_COLORS[i]}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" style="--i:${i}"/>`).join('');
   const labels = ends.map(e => `<text x="${W - R + 8}" y="${e.y + 4}" class="endl">${esc(series[e.i].short)}</text>`).join('');
   _charts[id] = { buckets, series, x: buckets.map((_, i) => x(i)), W, H, L, R, T, B, y: series.map(s => s.values.map(y)) };
   return `<div class="legend">${series.map((s, i) => `<span><b style="background:${CHART_COLORS[i]}"></b>${esc(s.name)}</span>`).join('')}</div>

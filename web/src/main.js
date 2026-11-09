@@ -1,5 +1,6 @@
 import { Commands, Session, request, loadSnapshot, startSync, stopSync } from './api.js';
 import './styles.css';
+import { enterScreen, refreshScreen, scrollTop, startSmoothScroll } from './motion.js';
 import { Repo, esc } from '@commerce-os/domain';
 import { S } from '@commerce-os/domain';
 import { LOGO, NAV, card, chartHover, icon, iconBtn, initials, pad, setPath, ui } from './ui-kit.js';
@@ -19,7 +20,7 @@ function parseRoute() {
   return { page: NAV.some(n => n[0] === head) ? head : 'overview', id: null };
 }
 const VIEWS = { overview, orders: ordersView, order360, crm: crmView, inventory: inventoryView, shipping: shippingView, driver: () => driverProfile(ui.route.id), finance: financeView, campaigns: campaignsView, settings: settingsView, roadmap: roadmapView };
-let _renderQueued = false;
+let _renderQueued = false, _screenKey = '';
 function render() {
   if (!Session.user || !Repo.data) return;
   ui.route = parseRoute();
@@ -31,6 +32,9 @@ function render() {
   const a = document.activeElement, focusId = a && a.id && a.id.startsWith('s-') ? a.id : null, caret = focusId ? a.selectionStart : 0;
   const main = document.getElementById('main'), openEx = [...main.querySelectorAll('details[open]')].length;
   main.innerHTML = VIEWS[ui.route.page]() + `<div class="footerhint">${esc(Session.user.name)} · ${esc(Session.user.role)} · ${Session.online ? 'Connected' : 'Reconnecting…'} · No live integrations, messages or payments.</div>`;
+  /* A new screen or tab flows in. A re-render of the same screen (after a sync or a filter) doesn't. */
+  const key = `${location.hash}|${ui.inv?.tab}|${ui.ship?.tab}|${ui.fin?.tab}|${ui.set?.tab}|${ui.ov?.preset}`;
+  if (key !== _screenKey) { _screenKey = key; enterScreen(main); } else refreshScreen(main);
   if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch { /* not a text input */ } } }
   void openEx;
 }
@@ -56,7 +60,7 @@ function placeNavPill(nav) {
 }
 function queueRender() { if (_renderQueued) return; _renderQueued = true; requestAnimationFrame(() => { _renderQueued = false; render(); }); }
 function bindEvents() {
-  window.addEventListener('hashchange', () => { closeModal(); render(); window.scrollTo(0, 0); });
+  window.addEventListener('hashchange', () => { closeModal(); render(); scrollTop(); });
   window.addEventListener('resize', () => { const nav = document.getElementById('nav'); if (nav && !nav.closest('[hidden]')) { _pill = null; placeNavPill(nav); } });
   document.addEventListener('click', e => {
     const close = e.target.closest('[data-close]'); if (close) return closeModal();
@@ -125,7 +129,7 @@ async function enter() {
   await loadSnapshot(); startSync();
   document.getElementById('header').hidden = false; document.getElementById('dock').hidden = Session.isDriver;
   document.getElementById('accountBtn').textContent = initials(Session.user.name);
-  renderChrome();
+  renderChrome(); startSmoothScroll();
   if (!location.hash || !allowed(parseRoute())) location.hash = home();
   render();
 }
