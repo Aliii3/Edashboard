@@ -1,4 +1,5 @@
 import { Commands, Session, request, loadSnapshot, pull } from './api.js';
+import { isAr, setLang } from './i18n.js';
 import { ROLES } from '@commerce-os/domain';
 import { Repo, Rule, esc, fail, round2, sum } from '@commerce-os/domain';
 import { RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
@@ -85,6 +86,7 @@ function allocInputsTotal() { return [...document.querySelectorAll('#modalForm [
 const A = {
   /* navigation and table */
   setTab([p, t]) { setPath(p, t); render(); },
+  toggleLang() { setLang(isAr() ? 'en' : 'ar'); location.reload(); },
   focusSearch() { const i = document.querySelector('#dock input'); if (i) i.focus(); },
   async syncNow() { try { await pull(); render(); toast('Up to date.'); } catch (e) { toast(e.message, 'bad'); } },
   sort([id, k]) { const st = ui.tbl[id]; if (st.s === k) st.d *= -1; else { st.s = k; st.d = 1; } st.p = 0; render(); },
@@ -306,7 +308,7 @@ const A = {
   async loadTest(n) { toast(`Generating ${n.toLocaleString('en-US')} orders…`); await run(async () => { ui.loadResult = await request('/api/admin/load-test', { method: 'POST', body: { orders: n } }); await loadSnapshot(); ui.tbl = {}; }, `Added ${n.toLocaleString('en-US')} orders. Reset demo data to remove them.`); },
 
   /* account and team */
-  accountModal() { const u = Session.user; modal('Your account', `${row('Name', esc(u.name))}${row('Email', esc(u.email))}${row('Role', esc(u.role))}<h3 class="mt">Change password</h3><div class="formgrid mt">${field('Current password', 'current', 'password', '', 'autocomplete="current-password"')}${field('New password (10+ characters)', 'next', 'password', '', 'autocomplete="new-password"')}</div><div class="actions mt"><button type="button" data-a="logout">Sign out</button></div>`, async f => { if (!f.next) return; await request('/api/me/password', { method: 'POST', body: f }); toast('Password changed.'); }, 'Save'); },
+  accountModal() { const u = Session.user; modal('Your account', `${row('Name', esc(u.name))}${row('Email', esc(u.email))}${row('Role', esc(u.role))}${row('Language', `<button type="button" class="small" data-a="toggleLang" data-no-i18n>${isAr() ? 'English' : 'العربية'}</button>`)}<h3 class="mt">Change password</h3><div class="formgrid mt">${field('Current password', 'current', 'password', '', 'autocomplete="current-password"')}${field('New password (10+ characters)', 'next', 'password', '', 'autocomplete="new-password"')}</div><div class="actions mt"><button type="button" data-a="logout">Sign out</button></div>`, async f => { if (!f.next) return; await request('/api/me/password', { method: 'POST', body: f }); toast('Password changed.'); }, 'Save'); },
   async logout() { closeModal(); await request('/api/auth/logout', { method: 'POST', body: {} }); Session.onAuthLost?.(); },
   async loadTeam() { await run(async () => { ui.team = await request('/api/users'); render(); }); },
   userModal(id) {

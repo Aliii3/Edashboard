@@ -1,6 +1,7 @@
 import { Commands, Session, request, loadSnapshot, startSync, stopSync } from './api.js';
 import './styles.css';
 import { enterScreen, refreshScreen, scrollTop, startSmoothScroll } from './motion.js';
+import { isAr, startI18n, translateTree } from './i18n.js';
 import { Repo, esc } from '@commerce-os/domain';
 import { S } from '@commerce-os/domain';
 import { LOGO, NAV, card, chartHover, icon, iconBtn, initials, pad, setPath, ui } from './ui-kit.js';
@@ -28,10 +29,11 @@ function render() {
   const navPage = ui.route.page === 'driver' ? 'shipping' : ui.route.page;
   document.getElementById('workspaceName').textContent = S().company;
   document.getElementById('nav').innerHTML = Session.isDriver ? `<a href="${home()}" class="active" aria-current="page">${icon('shipping')}<span class="nav-title">My deliveries</span></a>` : NAV.filter(([p]) => Session.canSee(p)).map(([p, name]) => `<a href="#/${p}" title="${name}" aria-label="${name}" class="${navPage === p ? 'active' : ''}" ${navPage === p ? 'aria-current="page"' : ''}>${icon(p)}<span class="nav-title">${name}</span></a>`).join('');
+  translateTree(document.getElementById('nav'));   // measure the highlight against the translated labels
   placeNavPill(document.getElementById('nav'));
   const a = document.activeElement, focusId = a && a.id && a.id.startsWith('s-') ? a.id : null, caret = focusId ? a.selectionStart : 0;
   const main = document.getElementById('main'), openEx = [...main.querySelectorAll('details[open]')].length;
-  main.innerHTML = VIEWS[ui.route.page]() + `<div class="footerhint">${esc(Session.user.name)} · ${esc(Session.user.role)} · ${Session.online ? 'Connected' : 'Reconnecting…'} · No live integrations, messages or payments.</div>`;
+  main.innerHTML = VIEWS[ui.route.page]() + `<div class="footerhint"><span>${esc(Session.user.name)}</span> · <span>${esc(Session.user.role)}</span> · <span>${Session.online ? 'Connected' : 'Reconnecting…'}</span> · <span>No live integrations, messages or payments.</span></div>`;
   /* A new screen or tab flows in. A re-render of the same screen (after a sync or a filter) doesn't. */
   const key = `${location.hash}|${ui.inv?.tab}|${ui.ship?.tab}|${ui.fin?.tab}|${ui.set?.tab}|${ui.ov?.preset}`;
   if (key !== _screenKey) { _screenKey = key; enterScreen(main); } else refreshScreen(main);
@@ -109,20 +111,22 @@ function bindEvents() {
 }
 function loginView() {
   document.getElementById('header').hidden = true; document.getElementById('dock').hidden = true; document.getElementById('rail').hidden = true;
-  document.getElementById('main').innerHTML = `<div class="login"><form id="loginForm" class="card"><div class="pad"><span class="logo-mark" aria-hidden="true">${LOGO(44)}</span><h1>Sign in to Commerce OS</h1><label class="field mt">Email<input name="email" type="email" required autocomplete="username"></label><label class="field mt">Password<input name="password" type="password" required autocomplete="current-password"></label><p id="loginError" class="form-error" role="alert"></p><button class="primary mt" style="width:100%">Sign in</button></div></form></div>`;
+  document.getElementById('main').innerHTML = `<div class="login"><div class="login-lang">${langToggle()}</div><form id="loginForm" class="card"><div class="pad"><span class="logo-mark" aria-hidden="true">${LOGO(44)}</span><h1>Sign in to Commerce OS</h1><label class="field mt">Email<input name="email" type="email" required autocomplete="username"></label><label class="field mt">Password<input name="password" type="password" required autocomplete="current-password"></label><p id="loginError" class="form-error" role="alert"></p><button class="primary mt" style="width:100%">Sign in</button></div></form></div>`;
   document.getElementById('loginForm').addEventListener('submit', async e => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
     try { const r = await request('/api/auth/login', { method: 'POST', body: f }); Session.user = r.user; await enter(); }
     catch (err) { document.getElementById('loginError').textContent = err.message; }
   });
 }
+/* Switches between English and Arabic. The label is the other language, written in that language. */
+const langToggle = () => `<button type="button" class="iconbtn lang-toggle" data-a="toggleLang" data-no-i18n aria-label="${isAr() ? 'English' : 'العربية'}" title="${isAr() ? 'English' : 'العربية'}">${isAr() ? 'EN' : 'ع'}</button>`;
 /* Side bar and header buttons: shortcuts to the things people do most, shown only when the role can do them. */
 function renderChrome() {
   document.getElementById('logoMark').innerHTML = LOGO(32);
   const rail = document.getElementById('rail'), link = (page, ic, label) => Session.canSee(page) ? `<a class="iconbtn" href="#/${page}" aria-label="${label}" title="${label}">${icon(ic)}</a>` : '';
   rail.hidden = Session.isDriver;
   rail.innerHTML = Session.isDriver ? '' : [iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)'), iconBtn('plus', 'newOrder', undefined, 'New order'), iconBtn('upload', 'importModal', undefined, 'Import orders from CSV'), iconBtn('download', 'exportOrders', undefined, 'Export orders as CSV'), '<span class="rail-gap"></span>', link('orders', 'orders', 'Orders'), link('shipping', 'truck', 'Shipping'), link('finance', 'finance', 'Finance'), '<span class="rail-gap"></span>', link('roadmap', 'roadmap', 'Roadmap'), link('settings', 'settings', 'Settings')].join('');
-  document.getElementById('topActions').innerHTML = (Session.isDriver ? '' : iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)')) + iconBtn('refresh', 'syncNow', undefined, 'Get the latest changes');
+  document.getElementById('topActions').innerHTML = (Session.isDriver ? '' : iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)')) + iconBtn('refresh', 'syncNow', undefined, 'Get the latest changes') + langToggle();
 }
 async function enter() {
   Session.onProgress = (i, n) => { const el = document.getElementById('main'); if (el && !Repo.data) el.innerHTML = `<p class="empty">Loading workspace… ${Math.round(i / n * 100)}%</p>`; };
@@ -136,6 +140,7 @@ async function enter() {
 const home = () => Session.isDriver ? `#/drivers/${Session.user.driverId}` : Session.canSee('overview') ? '#/overview' : '#/orders';
 const allowed = r => Session.canSee(r.page) && (!Session.isDriver || r.id === Session.user.driverId);
 async function boot() {
+  startI18n();
   bindEvents();
   Session.onChange = queueRender;
   Session.onAuthLost = () => { stopSync(); Repo.data = null; closeModal(); Session.user = null; loginView(); };

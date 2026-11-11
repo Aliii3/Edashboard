@@ -2,6 +2,7 @@
    scroll into view, and figures that count up. Everything is skipped when the device asks for
    reduced motion, and nothing replays when the same screen re-renders after a sync. */
 import Lenis from 'lenis';
+import { trText } from './i18n.js';
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const EASE = t => 1 - Math.pow(1 - t, 3);
@@ -57,7 +58,7 @@ function countUp(root) {
     const m = node.nodeValue.match(/^(.*?)(-?[\d,]+(?:\.\d+)?)(.*)$/s); if (!m) continue;
     const target = Number(m[2].replace(/,/g, '')), decimals = (m[2].split('.')[1] || '').length;
     if (!Number.isFinite(target) || target === 0) continue;
-    const fmt = v => m[1] + v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + m[3];
+    const fmt = v => trText(m[1] + v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + m[3]);
     const start = performance.now(), dur = 1100;
     const step = now => { if (!node.isConnected) return; const t = Math.min(1, (now - start) / dur); node.nodeValue = fmt(target * EASE(t)); if (t < 1) requestAnimationFrame(step); else node.nodeValue = fmt(target); };
     node.nodeValue = fmt(0); requestAnimationFrame(step);

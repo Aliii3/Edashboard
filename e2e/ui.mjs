@@ -135,6 +135,10 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  await go('#/settings');await p.locator('.tabs button',{hasText:'Data & scale'}).click();await clickBtn('Reset demo data');await p.waitForSelector('dialog[open]');await p.click('dialog button[type=submit]');await p.waitForTimeout(150);ok('reset',await ev(()=>Repo.all('orders').length)<300);
  // mobile
  await p.setViewportSize({width:390,height:844});for(const h of ['#/overview','#/orders','#/drivers/DRV-2','#/finance','#/shipping']){await go(h);await p.waitForTimeout(50);const over=await ev(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth);ok('no h-scroll '+h,over<=0,over);await shot('mob-'+h.replace(/\W/g,''))}
+ // Arabic: the switch turns the interface right to left and translates it, then back to English
+ await p.setViewportSize({width:1440,height:900});await go('#/overview');await p.click('#topActions .lang-toggle');await p.waitForSelector('html[dir=rtl]');await p.waitForSelector('#main .hero');await p.waitForTimeout(300);
+ ok('arabic nav',(await p.locator('nav').innerText()).includes('الطلبات'));ok('arabic money',(await p.locator('#main').innerText()).includes('ج.م'));await shot('ar-overview');
+ await p.click('#topActions .lang-toggle');await p.waitForSelector('html[dir=ltr]');await p.waitForSelector('#main .hero');ok('back to english',(await p.locator('nav').innerText()).includes('Orders'));
  console.log('errors',errs.slice(0,10));ok('no console errors',errs.length===0);
  console.log(`pass ${pass} fail ${fail}`);await b.close();return fail;
 }
