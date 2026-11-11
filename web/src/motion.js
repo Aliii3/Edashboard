@@ -12,7 +12,7 @@ export function startSmoothScroll() {
   if (lenis || reduced()) return;
   /* lerp sets the glide: lower is a longer, softer trail behind the wheel. Nested scroll areas
      (tables, pop-ups, search results) keep their own native scrolling. */
-  lenis = new Lenis({ autoRaf: true, lerp: 0.085, wheelMultiplier: 0.95, allowNestedScroll: true, prevent: n => !!n.closest?.('dialog, .search-results') });
+  lenis = new Lenis({ autoRaf: true, lerp: 0.2, wheelMultiplier: 1, allowNestedScroll: true, prevent: n => !!n.closest?.('dialog, .search-results') });
 }
 export function scrollTop() { if (lenis) lenis.scrollTo(0, { immediate: true, force: true }); else window.scrollTo(0, 0); }
 
@@ -23,7 +23,7 @@ export function enterScreen(root) {
   io?.disconnect(); io = null;
   if (reduced()) return;
   root.classList.remove('entering'); void root.offsetWidth; root.classList.add('entering');
-  clearTimeout(enterScreen.t); enterScreen.t = setTimeout(() => root.classList.remove('entering'), 1800);
+  clearTimeout(enterScreen.t); enterScreen.t = setTimeout(() => root.classList.remove('entering'), 1000);
   revealedTo = 0;
   watch([...root.querySelectorAll(REVEAL)]);
   countUp(root);
@@ -42,12 +42,12 @@ function watch(els) {
     const shown = entries.filter(e => e.isIntersecting).map(e => e.target);
     shown.sort((a, b) => { const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect(); return ra.top - rb.top || ra.left - rb.left; });
     shown.forEach((el, i) => {
-      el.style.setProperty('--d', Math.min(i, 9) * 60 + 'ms');
+      el.style.setProperty('--d', Math.min(i, 5) * 20 + 'ms');
       el.classList.add('in'); io?.unobserve(el); revealedTo = Math.max(revealedTo, el.getBoundingClientRect().bottom + scrollY);
       /* Once settled, drop the reveal classes so hover effects run without the stagger delay. */
-      setTimeout(() => { el.classList.remove('rv', 'in'); el.style.removeProperty('--d'); }, 900 + Math.min(i, 9) * 60);
+      setTimeout(() => { el.classList.remove('rv', 'in'); el.style.removeProperty('--d'); }, 320 + Math.min(i, 5) * 20);
     });
-  }, { rootMargin: '0px 0px -4% 0px', threshold: 0.06 });
+  }, { rootMargin: '0px', threshold: 0 });   // any visible part reveals it, so nothing sits blank at the screen edge
   for (const el of els) io.observe(el);
 }
 
@@ -59,7 +59,7 @@ function countUp(root) {
     const target = Number(m[2].replace(/,/g, '')), decimals = (m[2].split('.')[1] || '').length;
     if (!Number.isFinite(target) || target === 0) continue;
     const fmt = v => trText(m[1] + v.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + m[3]);
-    const start = performance.now(), dur = 1100;
+    const start = performance.now(), dur = 600;
     const step = now => { if (!node.isConnected) return; const t = Math.min(1, (now - start) / dur); node.nodeValue = fmt(target * EASE(t)); if (t < 1) requestAnimationFrame(step); else node.nodeValue = fmt(target); };
     node.nodeValue = fmt(0); requestAnimationFrame(step);
   }

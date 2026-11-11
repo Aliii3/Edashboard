@@ -143,14 +143,14 @@ button[type=submit]:disabled{opacity:.6;cursor:progress}
 :root{--flow:cubic-bezier(.22,1,.36,1);--spring:cubic-bezier(.34,1.4,.64,1)}
 html.lenis,html.lenis body{height:auto}.lenis.lenis-smooth{scroll-behavior:auto!important}.lenis.lenis-smooth [data-lenis-prevent]{overscroll-behavior:contain}.lenis.lenis-stopped{overflow:clip}
 /* Scroll reveal: fade and rise, staggered by position. */
-.rv{opacity:0;transform:translate3d(0,22px,0) scale(.985);transition:opacity .8s var(--flow) var(--d,0ms),transform .8s var(--flow) var(--d,0ms)}
+.rv{opacity:0;transform:translate3d(0,10px,0);transition:opacity .28s var(--flow) var(--d,0ms),transform .28s var(--flow) var(--d,0ms)}
 .rv.in{opacity:1;transform:none}
 /* Entrance details on a new screen */
-.entering .ln{stroke-dasharray:1;stroke-dashoffset:1;animation:draw 1.5s var(--flow) forwards;animation-delay:calc(.25s + var(--i,0) * .12s)}
-.entering .area{opacity:0;animation:fadein 1.2s var(--flow) .6s forwards}
-.entering .barrow u{transform-origin:left;animation:grow 1s var(--flow) both}
-.entering .g-fill{animation:gauge 1.4s var(--flow) .2s both}
-.entering .hero-title{animation:rise .9s var(--flow) both}
+.entering .ln{stroke-dasharray:1;stroke-dashoffset:1;animation:draw .8s var(--flow) forwards;animation-delay:calc(.08s + var(--i,0) * .06s)}
+.entering .area{opacity:0;animation:fadein .6s var(--flow) .3s forwards}
+.entering .barrow u{transform-origin:left;animation:grow .5s var(--flow) both}
+.entering .g-fill{animation:gauge .7s var(--flow) .05s both}
+.entering .hero-title{animation:rise .4s var(--flow) both}
 @keyframes draw{to{stroke-dashoffset:0}}@keyframes fadein{to{opacity:1}}@keyframes grow{from{transform:scaleX(0)}}@keyframes gauge{from{stroke-dasharray:0 300}}@keyframes rise{from{opacity:0;transform:translate3d(0,14px,0)}}
 @keyframes pop{from{opacity:0;transform:translate3d(0,14px,0) scale(.97)}}@keyframes veil{from{opacity:0}}@keyframes toastin{from{opacity:0;transform:translate3d(0,12px,0) scale(.96)}}
 /* Gentle lift on things you can click */
