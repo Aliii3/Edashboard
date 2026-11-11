@@ -46,7 +46,10 @@ let _pill = null;
 const EASE_OUT = 'cubic-bezier(.215,.61,.355,1)', EASE_IN_OUT = 'cubic-bezier(.645,.045,.355,1)';
 function placeNavPill(nav) {
   const a = nav.querySelector('a.active'); if (!a) { _pill = null; return; }
-  const l = a.offsetLeft, r = nav.scrollWidth - (a.offsetLeft + a.offsetWidth);
+  /* On narrow screens the bar scrolls sideways: keep the current tab in view. Positions are measured
+     against the visible box, which is what absolute positioning inside a scrolling bar uses. */
+  if (nav.scrollWidth > nav.clientWidth) { const want = a.offsetLeft - (nav.clientWidth - a.offsetWidth) / 2; if (Math.abs(nav.scrollLeft - want) > 4) nav.scrollLeft = want; }
+  const l = a.offsetLeft, r = nav.clientWidth - (a.offsetLeft + a.offsetWidth);
   let pill = nav.querySelector('.nav-pill');
   const fresh = !pill; if (fresh) { pill = document.createElement('span'); pill.className = 'nav-pill'; pill.setAttribute('aria-hidden', 'true'); nav.prepend(pill); }
   nav.classList.add('has-pill');
