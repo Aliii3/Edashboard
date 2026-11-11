@@ -4,6 +4,8 @@ import { AREAS, Commands, DEFAULT_SETTINGS, FAILURE_REASONS, S, calc, carrierKey
    LAYER 3 · DEMO DATA: fictional records built by running the real commands
    against a simulated clock, so sample data obeys the same rules as live use.
    ========================================================================== */
+/* Rotates through the return outcomes so the demo shows each one. */
+const seedReturns = { n: 0 };
 function rngFrom(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const FIRST = ['Ahmed', 'Sara', 'Omar', 'Nour', 'Mariam', 'Youssef', 'Farah', 'Karim', 'Hana', 'Tarek', 'Salma', 'Laila', 'Mostafa', 'Dina', 'Amr', 'Yasmin', 'Hassan', 'Rana', 'Sherif', 'Malak', 'Ziad', 'Habiba', 'Adham', 'Jana'];
 const LAST = ['Samir', 'Hassan', 'Mostafa', 'Adel', 'Khaled', 'Ali', 'Ibrahim', 'Nabil', 'Mahmoud', 'Fathy', 'Hossam', 'Yasser', 'Saad', 'Lotfy', 'Zaki', 'Shawky', 'Rashad', 'Helmy'];
@@ -65,7 +67,7 @@ function runScenario(o, target, mode, carrierId, rng, t0, ctx = {}) {
   if (failFirst) { step(3); Commands.setDeliveryStatus(d.id, 'Failed Attempt', { reason: pick(rng, FAILURE_REASONS.slice(0, 5)), note: 'Called twice, no answer at the door' }); }
   if (target === 'failed') return;
   if (target === 'retry') { step(1); Commands.setDeliveryStatus(d.id, 'Retry Scheduled', { retryAt: addHours(t, ctx.retryIn ?? 30), note: 'Customer asked for another day' }); return; }
-  if (target === 'failedReturn' || target === 'failedRTW') { step(5); Commands.startReturn(d.id, 'Customer unreachable after follow-up'); if (target === 'failedRTW') { step(4); Commands.receiveAtWarehouse(d.id); } return; }
+  if (target === 'failedReturn' || target === 'failedRTW') { step(5); Commands.startReturn(d.id, 'Customer unreachable after follow-up'); if (target === 'failedRTW') { step(4); const k = (seedReturns.n++) % 3; Commands.receiveAtWarehouse(d.id, '', [{ reason: 'Customer not available', shipping: 'customer', paidTo: 'unpaid' }, { reason: 'Customer refused', shipping: 'business' }, { reason: 'Wrong or incomplete address', shipping: 'waived' }][k]); } return; }
   if (failFirst) { step(10); Commands.setDeliveryStatus(d.id, 'Retry Scheduled', { retryAt: addHours(t, 4) }); step(5); Commands.setDeliveryStatus(d.id, 'Out for Delivery'); }
   step(3);
   const prepaid = o.paymentMethod !== 'COD';
@@ -73,7 +75,7 @@ function runScenario(o, target, mode, carrierId, rng, t0, ctx = {}) {
     const qs = {}; let reduced = false; for (const it of d.items) { if (!reduced && it.qty > 1) { qs[it.lineId] = it.qty - 1; reduced = true; } else if (!reduced && d.items.length > 1) { qs[it.lineId] = 0; reduced = true; } else qs[it.lineId] = it.qty; }
     Commands.deliver(d.id, { quantities: qs, reason: 'Customer kept part of the order' });
     const due = netCollect(); if (due > 0 && !prepaid) Commands.collect(d.id, { amount: due, method: 'Cash' });
-    if (target === 'partialBack') { step(3); Commands.startReturn(d.id, 'Bringing back the undelivered units'); step(4); Commands.receiveAtWarehouse(d.id); }
+    if (target === 'partialBack') { step(3); Commands.startReturn(d.id, 'Bringing back the undelivered units'); step(4); Commands.receiveAtWarehouse(d.id, '', { reason: 'Customer refused', shipping: 'business' }); }
     return;
   }
   Commands.deliver(d.id, {});
@@ -115,6 +117,7 @@ function generateOrders(n, rng, now, { customers, campaigns, drivers, couriers, 
   }
 }
 function buildSeedWorkspace() {
+  seedReturns.n = 0;
   Repo.load(Repo.empty());
   const rng = rngFrom(20261105), realNow = new Date().toISOString(); const now = realNow;
   Clock.fixed = addHours(now, -24 * 40);

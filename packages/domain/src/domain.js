@@ -22,6 +22,7 @@ const PAYMENT_METHODS = ['Cash', 'InstaPay', 'Mobile wallet', 'Card', 'Bank tran
 const CHANNELS = ['Instagram', 'WhatsApp', 'Facebook', 'Phone', 'Website', 'Walk-in', 'Exchange'];
 const ENTRY_METHODS = ['Manual', 'CSV', 'API (planned)'];
 const FAILURE_REASONS = ['Customer unreachable', 'Customer refused', 'Wrong address', 'Rescheduled by customer', 'No cash available', 'Other'];
+const RETURN_REASONS = ['Customer not available', 'Customer refused', 'Wrong or incomplete address', 'Customer cancelled', 'Damaged in transit', 'Other'];
 const EXPENSE_CATS = ['Rent', 'Salaries', 'Utilities', 'Software', 'Packing labor', 'Other'];
 const DRIVER_EXPENSE_CATS = ['Fuel', 'Parking', 'Toll', 'Maintenance', 'Delivery fee payout', 'Other'];
 const AREAS = ['New Cairo', 'Maadi', 'Nasr City', 'Heliopolis', 'Zamalek', 'Dokki', 'Mohandessin', 'Giza', '6th of October', 'Sheikh Zayed', 'Alexandria', 'Mansoura'];
@@ -83,7 +84,9 @@ function orderEntries(o) {
   let feeBooked = false;
   for (const d of Repo.by('deliveries', 'orderId', o.id)) {
     if (d.pickedUpAt && d.cost) push('delivery', d.pickedUpAt, d.cost, `Delivery cost ${d.id}`);
-    if (d.returnedAt && d.returnCost) push('delivery', d.returnedAt, d.returnCost, `Return-to-warehouse cost ${d.id}`);
+    if (d.returnedAt && d.returnCost && d.shippingPaidBy !== 'waived') push('delivery', d.returnedAt, d.returnCost, `Return-to-warehouse cost ${d.id}`);
+    if (d.returnedAt && d.shippingPaidBy === 'waived' && d.pickedUpAt && d.cost) push('delivery', d.returnedAt, -d.cost, `Carrier waived the delivery cost on returned ${d.id}`);
+    if (d.returnedAt && d.feeCharged) push('revenue', d.returnedAt, d.feeCharged, `Shipping fee charged to the customer on returned ${d.id}`, 'fee');
     if (d.completedAt) {
       for (const it of d.items) if (it.delivered) {
         const l = byId.get(it.lineId);
@@ -229,7 +232,8 @@ function expectedFromCustomer(d) {
 function courierDeliveryBalance(d) {
   const ps = Repo.by('payments', 'deliveryId', d.id).filter(p => p.holderKey === carrierKey('courier', d.carrierId));
   const customer = sum(ps, p => p.amount);
-  const deductions = round2((d.pickedUpAt ? d.cost : 0) + (d.returnedAt ? d.returnCost : 0) + (d.completedAt ? d.codFee : 0));
+  const waived = d.shippingPaidBy === 'waived';
+  const deductions = round2((d.pickedUpAt && !waived ? d.cost : 0) + (d.returnedAt && !waived ? d.returnCost : 0) + (d.completedAt ? d.codFee : 0));
   const expectedNet = round2(customer - deductions);
   const actual = sum(Repo.by('settlementAllocs', 'deliveryId', d.id), a => a.net);
   return { customer, deductions, expectedNet, actual, gap: round2(expectedNet - actual) };
@@ -521,18 +525,38 @@ const Commands = {
   },
   startReturn(deliveryId, note) { return Commands.setDeliveryStatus(deliveryId, 'Return in Transit', { note: note || 'Heading back to the warehouse' }); },
   /* Physical handover at the warehouse: undelivered units return to stock, once. */
-  receiveAtWarehouse(deliveryId, note) {
+  /* Physical handover at the warehouse: undelivered units return to stock, once.
+     outcome records why it came back and who pays the shipping:
+       business  the business carries the delivery and return cost (default)
+       waived    the carrier charged nothing, so no shipping cost is booked
+       customer  the customer pays a shipping fee, booked as revenue; paidTo says
+                 whether they already paid it to the carrier, to the business, or not yet */
+  receiveAtWarehouse(deliveryId, note, outcome = {}) {
     return Repo.tx(() => {
       const d = Repo.get('deliveries', deliveryId), why = Guards.flow(d, 'Returned to Warehouse'); if (why) fail(why);
       const o = orderOf(d.orderId), at = Clock.now(); let n = 0;
+      const paidBy = outcome?.shipping || 'business', reason = String(outcome?.reason || '').trim();
+      if (!['business', 'waived', 'customer'].includes(paidBy)) fail('Choose who pays the shipping.');
+      if (reason && !RETURN_REASONS.includes(reason)) fail('Choose a return reason from the list.');
+      if (paidBy === 'waived' && d.items.some(i => i.delivered > 0)) fail('Part of this parcel was delivered, so the carrier still charges for the trip. Choose "The business" instead.');
+      let fee = 0, paidTo = 'unpaid';
+      if (paidBy === 'customer') {
+        fee = round2(outcome.fee ?? (o.deliveryFee || d.cost || 0)); if (!(fee > 0)) fail('Enter the shipping fee the customer pays.');
+        paidTo = outcome.paidTo || 'unpaid'; if (!['unpaid', 'carrier', 'business'].includes(paidTo)) fail('Choose whether the customer has paid the fee.');
+      }
       for (const it of d.items) {
         const back = it.qty - it.delivered; if (back <= 0) continue;
         postMovement({ item: it.sku, itemType: 'sku', qty: back, kind: 'Inspected return', key: `undelivered:${d.id}:${it.lineId}`, ref: `#${o.id} · ${d.id}`, note: 'Undelivered parcel inspected and restocked' });
         const l = Repo.get('lines', it.lineId); Repo.update('lines', l, { undeliveredBack: l.undeliveredBack + back }); n += back;
       }
-      Repo.update('deliveries', d, { status: 'Returned to Warehouse', custody: 'warehouse', returnedAt: at, updatedAt: at, history: [...d.history, { at, status: 'Returned to Warehouse', by: activityBy(), note: note || `${n} unit(s) received and inspected` }] });
+      const who = { business: 'business pays the shipping', waived: 'no shipping cost (carrier waived it)', customer: `customer pays a ${money(fee)} shipping fee${paidTo === 'unpaid' ? ', not paid yet' : paidTo === 'carrier' ? `, paid to ${carrierName(d)}` : ', paid to the business'}` }[paidBy];
+      Repo.update('deliveries', d, { status: 'Returned to Warehouse', custody: 'warehouse', returnedAt: at, updatedAt: at, returnReason: reason || null, shippingPaidBy: paidBy, feeCharged: fee, history: [...d.history, { at, status: 'Returned to Warehouse', by: activityBy(), note: `${note || `${n} unit(s) received and inspected`}${reason ? ` · ${reason}` : ''} · ${who}` }] });
+      if (paidTo !== 'unpaid') {
+        const toCarrier = paidTo === 'carrier';
+        Repo.insert('payments', { id: 'PAY-' + Repo.nextId('PAY', 5001), orderId: o.id, deliveryId: toCarrier ? d.id : null, kind: 'collection', method: toCarrier ? 'Cash' : (PAYMENT_METHODS.includes(outcome.method) ? outcome.method : 'Cash'), amount: fee, holderKey: toCarrier ? d.carrierKey : 'business', driverId: toCarrier && d.mode === 'driver' ? d.carrierId : null, ref: `FEE-${d.id}`, at, by: activityBy(), fee: 0, note: 'Shipping fee on a returned parcel', reason: '' });
+      }
       if (!linesOf(o).some(l => l.delivered > 0)) Repo.update('orders', o, { status: 'Returned', returnedAt: at });
-      log(`${d.id}: ${n} unit(s) received at warehouse from ${carrierName(d)}`, { orderId: o.id, deliveryId: d.id, driverId: d.mode === 'driver' ? d.carrierId : undefined });
+      log(`${d.id}: ${n} unit(s) received at warehouse from ${carrierName(d)}${reason ? ` (${reason})` : ''} · ${who}`, { orderId: o.id, deliveryId: d.id, driverId: d.mode === 'driver' ? d.carrierId : undefined });
     });
   },
 
@@ -835,7 +859,8 @@ const Commands = {
     return Repo.tx(() => {
       if (!f.name?.trim()) fail('Enter a campaign name.');
       if (f.end && f.start && f.end < f.start) fail('End date must be on or after the start date.');
-      const row = { name: f.name.trim(), platform: f.platform, start: f.start, end: f.end, budget: Number(f.budget) || 0, reportedRoas: Number(f.reportedRoas) || 0, source: 'Manual' };
+      const row = { name: f.name.trim(), platform: f.platform, start: f.start, end: f.end, budget: Number(f.budget) || 0, reportedRoas: Number(f.reportedRoas) || 0, source: 'Manual', metaId: String(f.metaId ?? '').trim() || null };
+      if (row.metaId && !/^[0-9A-Za-z_-]{3,40}$/.test(row.metaId)) fail('A Meta campaign ID is letters, digits, dashes or underscores, as shown in Ads Manager.');
       if (row.budget < 0 || row.reportedRoas < 0) fail('Budget and ROAS cannot be negative.');
       if (f.id) { Repo.update('campaigns', Repo.get('campaigns', f.id), row); log(`Campaign ${row.name} updated`, {}); return f.id; }
       const id = 'CMP-' + Repo.nextId('CMP', 1); Repo.insert('campaigns', { id, ...row }); log(`Campaign ${row.name} created`, {}); return id;
@@ -1001,4 +1026,4 @@ function integrity() {
   return out;
 }
 
-export { assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };
+export { RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };

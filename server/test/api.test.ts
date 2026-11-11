@@ -6,7 +6,7 @@ process.env.NODE_ENV = 'test';
 const { migrateDb, ensureColumns, pool, loadAll, replaceAll, withTx } = await import('../src/db.ts');
 const { hashPassword } = await import('../src/auth.ts');
 const { buildApp } = await import('../src/app.ts');
-const { Repo, integrity, driverCash, stockOnHand, dateKey } = await import('@commerce-os/domain');
+const { Repo, integrity, driverCash, stockOnHand, dateKey, calc, paymentStatus, courierDeliveryBalance, FAILURE_REASONS } = await import('@commerce-os/domain');
 const { buildSeedWorkspace } = await import('@commerce-os/domain/seed');
 const PW = 'test-password-123';
 const { EXPENSE_CATS } = await import('@commerce-os/domain'); const EXPENSE_CAT = EXPENSE_CATS[0];
@@ -209,6 +209,45 @@ test('closing the books locks past figures', async () => {
   const log = (await pool.query('SELECT settings FROM workspace')).rows[0].settings.periodLog;
   assert.deepEqual(log.map((x: any) => x.kind), ['close', 'reopen']);
 });
+test('who pays the shipping when a parcel comes back', async () => {
+  const backToWarehouse = async (driver = 'DRV-1') => {
+    const { o, d } = await readyDelivery(driver);
+    assert.equal((await cmd('ops', 'setDeliveryStatus', d.id, 'Out for Delivery', { note: 'round' })).status, 200);
+    assert.equal((await cmd('ops', 'setDeliveryStatus', d.id, 'Failed Attempt', { reason: FAILURE_REASONS[0], note: 'no answer' })).status, 200);
+    assert.equal((await cmd('ops', 'startReturn', d.id)).status, 200);
+    return { o, d };
+  };
+  /* Customer pays a fee, in cash to the driver: it is revenue, the order is paid, and the driver holds the cash. */
+  const a = await backToWarehouse();
+  await full(); const heldBefore = driverCash('DRV-1').outstanding;
+  assert.equal((await cmd('wh', 'receiveAtWarehouse', a.d.id, '', { reason: 'Nope', shipping: 'business' })).status, 422);
+  assert.equal((await cmd('wh', 'receiveAtWarehouse', a.d.id, '', { reason: 'Customer not available', shipping: 'customer', fee: 0 })).status, 422);
+  assert.equal((await cmd('wh', 'receiveAtWarehouse', a.d.id, '', { reason: 'Customer not available', shipping: 'customer', fee: 60, paidTo: 'carrier' })).status, 200);
+  await full();
+  const oa = Repo.get('orders', a.o.id), ca = calc(oa);
+  assert.equal(oa.status, 'Returned'); assert.equal(ca.revenue, 60); assert.equal(ca.collected, 60); assert.equal(paymentStatus(oa), 'Paid');
+  assert.equal(driverCash('DRV-1').outstanding, heldBefore + 60);
+  /* Customer owes the fee: revenue is booked and the order shows as unpaid until they pay. */
+  const b = await backToWarehouse();
+  assert.equal((await cmd('wh', 'receiveAtWarehouse', b.d.id, '', { reason: 'Customer refused', shipping: 'customer', fee: 50 })).status, 200);
+  await full(); assert.equal(paymentStatus(Repo.get('orders', b.o.id)), 'Unpaid');
+  /* Carrier waived it: the delivery cost booked at pickup is reversed and no return cost is booked. */
+  const c = await backToWarehouse();
+  assert.equal((await cmd('wh', 'receiveAtWarehouse', c.d.id, '', { reason: 'Wrong or incomplete address', shipping: 'waived' })).status, 200);
+  await full(); assert.equal(calc(Repo.get('orders', c.o.id)).delivery, 0);
+  /* Courier version: a waived trip deducts nothing from the courier's settlement. */
+  const { o: o2 } = { o: await newOrder() }; await cmd('ops', 'confirmOrder', o2.id); await cmd('ops', 'advanceOrder', o2.id, 'Processing'); await cmd('ops', 'advanceOrder', o2.id, 'Ready');
+  const cd = (await cmd('ops', 'assign', o2.id, 'courier', 'BOSTA')).json().result; await cmd('wh', 'pickup', cd.id);
+  await cmd('ops', 'setDeliveryStatus', cd.id, 'Out for Delivery', {}); await cmd('ops', 'setDeliveryStatus', cd.id, 'Failed Attempt', { reason: FAILURE_REASONS[0] }); await cmd('ops', 'startReturn', cd.id);
+  assert.equal((await cmd('wh', 'receiveAtWarehouse', cd.id, '', { reason: 'Customer not available', shipping: 'waived' })).status, 200);
+  await full(); assert.equal(courierDeliveryBalance(Repo.get('deliveries', cd.id)).deductions, 0);
+  assert.equal(integrity().filter((x: any) => !x.ok).length, 0, JSON.stringify(integrity().filter((x: any) => !x.ok)));
+});
+test('campaigns keep their Meta campaign ID', async () => {
+  const r = await cmd('fin', 'saveCampaign', { name: 'Winter drop', platform: 'Meta', start: '2026-11-01', end: '2026-11-30', budget: 5000, metaId: '120210000000000001' });
+  assert.equal(r.status, 200); assert.equal((await pool.query('SELECT meta_id FROM campaigns WHERE id=$1', [r.json().result])).rows[0].meta_id, '120210000000000001');
+  assert.equal((await cmd('fin', 'saveCampaign', { name: 'Bad', platform: 'Meta', start: '2026-11-01', end: '2026-11-30', metaId: 'has spaces in it' })).status, 422);
+});
 test('team management', async () => {
   assert.equal((await call('owner', 'POST', '/api/users', { email: 'x@t.test', name: 'X', role: 'operations', password: 'short' })).status, 422);
   assert.equal((await call('owner', 'POST', '/api/users', { email: 'd@t.test', name: 'D', role: 'driver', password: PW })).status, 422);
@@ -237,6 +276,13 @@ test('backup, restore and reset', async () => {
   assert.equal((await call('owner', 'POST', '/api/admin/reset', {})).status, 200);
   assert.ok(await dbCount('SELECT count(*)::int n FROM orders') < 200);
   assert.equal((await call('owner', 'GET', '/api/me')).status, 200, 'logins survive a reset');
+});
+test('resetting demo data creates one test login per role when a demo password is set', async () => {
+  process.env.SEED_PASSWORD = 'demo-password-xyz';
+  const r = await call('owner', 'POST', '/api/admin/reset', {}); delete process.env.SEED_PASSWORD;
+  assert.equal(r.status, 200); assert.deepEqual(r.json().demoLogins.map((x: any) => x.role), ['owner', 'operations', 'warehouse', 'finance', 'driver']);
+  const login = await call(null, 'POST', '/api/auth/login', { email: 'warehouse@nilestudio.example', password: 'demo-password-xyz' });
+  assert.equal(login.status, 200); assert.equal(login.json().user.role, 'warehouse');
 });
 test('login attempts are rate limited', async () => {
   let last = 0; for (let i = 0; i < 12; i++) last = (await call(null, 'POST', '/api/auth/login', { email: 'z@t.test', password: 'wrong-password' })).status;

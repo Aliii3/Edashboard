@@ -41,3 +41,16 @@ export async function ensureAdmin() {
   await pool.query(`INSERT INTO users (email, name, password_hash, role) VALUES ($1,'Owner',$2,'owner') ON CONFLICT (email) DO NOTHING`, [email.toLowerCase(), await hashPassword(pw)]);
   return true;
 }
+
+/* Test logins for the demo data, one per role. The password comes from SEED_PASSWORD, never from code.
+   Used by `npm run db:seed` and by "Reset demo data" when demo tools are on. */
+export const DEMO_PEOPLE: [string, string, string, string | null][] = [
+  ['owner@nilestudio.example', 'Nadia (Owner)', 'owner', null], ['ops@nilestudio.example', 'Sherine (Operations)', 'operations', null],
+  ['warehouse@nilestudio.example', 'Tamer (Warehouse)', 'warehouse', null], ['finance@nilestudio.example', 'Mona (Finance)', 'finance', null],
+  ['driver@nilestudio.example', 'Mahmoud Fawzy', 'driver', 'DRV-1'],
+];
+export async function ensureDemoLogins(pw: string) {
+  const hash = await hashPassword(pw);
+  for (const [email, name, role, driver] of DEMO_PEOPLE) await pool.query(`INSERT INTO users (email, name, password_hash, role, driver_id) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (email) DO UPDATE SET password_hash=$3, name=$2, role=$4, driver_id=$5, active=true`, [email, name, hash, role, driver]);
+  return DEMO_PEOPLE.map(([email, , role]) => ({ email, role }));
+}

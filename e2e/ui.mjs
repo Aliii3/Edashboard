@@ -62,7 +62,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  // Delivery details modal
  await go(`#/orders/${oid}`);await p.waitForTimeout(60);await p.locator('#main .delivery .link').first().click();await p.waitForSelector('dialog[open]');await shot('m-delivery');await p.click('dialog [data-close]');
  // Return undelivered unit
- await clickBtn('Start return');await p.waitForTimeout(60);await clickBtn('Receive at warehouse');await p.waitForTimeout(60);ok('rtw',await ev(`Repo.get('deliveries','${did}').status`)==='Returned to Warehouse');
+ await clickBtn('Start return');await p.waitForTimeout(60);await clickBtn('Receive at warehouse');await p.waitForSelector('dialog[open]');await p.click('dialog button[type=submit]');await p.waitForTimeout(120);ok('rtw',await ev(`Repo.get('deliveries','${did}').status`)==='Returned to Warehouse');
  // Customer return + refund
  await clickBtn('Open return');await p.waitForSelector('dialog[open]');const line2=await ev(`linesOf(orderOf(${oid}))[1].id`);await p.fill(`input[name="q${line2}"]`,'1');await p.fill('input[name=reason]','Did not fit');await p.click('dialog button[type=submit]');await p.waitForTimeout(80);
  await clickBtn('Accept item');await p.waitForTimeout(80);ok('return reversal',await ev(`calc(orderOf(${oid})).revenue`)===940,await ev(`calc(orderOf(${oid})).revenue`));ok('still collected',await ev(`calc(orderOf(${oid})).collected`)===1000);
@@ -98,6 +98,13 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  await p.fill('#dock input','Mahmoud');await p.waitForTimeout(40);ok('global search',(await p.locator('#searchResults').innerText()).includes('Mahmoud'));await p.locator('#searchResults a').first().click();await p.waitForTimeout(60);
  // integrity after everything
  const bad=await ev(()=>integrity().filter(x=>!x.ok));ok('integrity after flows',!bad.length,JSON.stringify(bad));
+ // receive a returned parcel, charging the customer the shipping fee
+ const rit=await ev(()=>{const d=Repo.all('deliveries').find(x=>x.status==='Return in Transit');return d&&{id:d.id,o:d.orderId}});
+ if(rit){await go('#/orders/'+rit.o);await p.waitForTimeout(80);await clickBtn('Receive at warehouse');await p.waitForSelector('dialog[open]');await shot('m-receive');
+  await p.selectOption('dialog select[name=reason]','Customer not available');await p.locator('dialog input[name=shipping][value=customer]').check();await p.waitForTimeout(40);
+  ok('fee fields shown',await p.locator('#feeFields').isVisible());await p.fill('dialog input[name=fee]','65');await p.selectOption('dialog select[name=paidTo]','business');await p.click('dialog button[type=submit]');await p.waitForTimeout(150);
+  ok('parcel received with fee',await ev(`Repo.get('deliveries','${rit.id}').shippingPaidBy`)==='customer');ok('fee is revenue',await ev(`calc(orderOf(${rit.o})).revenue`)>=65);}
+ else ok('a return in transit exists',false);
  // close the books from Finance, check the figures are recorded, then reopen as owner
  await go('#/finance');await p.locator('.tabs button',{hasText:'Closed periods'}).click();await clickBtn('Close books…');await p.waitForSelector('dialog[open]');await p.click('dialog button[type=submit]');await p.waitForTimeout(150);
  ok('books closed',!!(await ev(()=>S().lockedThrough)),await toast());ok('closing figures shown',(await p.locator('#main').innerText()).includes('Figures at closing vs now'));

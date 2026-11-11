@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { Rule, ROLES } from '@commerce-os/domain';
 import { pool, ensureColumns, migrateDb, describeDbError } from './db.ts';
-import { COOKIE, SESSION_DAYS, createSession, destroySession, destroyUserSessions, userFromToken, hashPassword, checkPassword, validPassword, dummyHash, tooManyAttempts, recordFailure, ensureAdmin } from './auth.ts';
+import { COOKIE, SESSION_DAYS, createSession, destroySession, destroyUserSessions, userFromToken, hashPassword, checkPassword, validPassword, dummyHash, tooManyAttempts, recordFailure, ensureAdmin, ensureDemoLogins } from './auth.ts';
 import { Forbidden, runCommand, resetDemo, loadTest, restore, ensureWorkspace, type User } from './store.ts';
 import { version, snapshotPage, driverSnapshot, changesSince, backupChunks, redactDelta } from './reads.ts';
 
@@ -136,7 +136,12 @@ export async function buildApp({ serveStatic = false } = {}) {
   /* Workspace data */
   app.get('/api/admin/backup', { preHandler: owner }, async (_req, reply) => reply.type('application/json').header('Content-Disposition', `attachment; filename="commerce-os-backup-${new Date().toISOString().slice(0, 10)}.json"`).send(Readable.from(backupChunks())));
   app.post('/api/admin/restore', { preHandler: owner }, async req => { await restore(req.body); return { ok: true }; });
-  app.post('/api/admin/reset', { preHandler: [demoOnly, owner] }, async () => { await resetDemo(); return { ok: true }; });
+  app.post('/api/admin/reset', { preHandler: [demoOnly, owner] }, async () => {
+    await resetDemo();
+    /* With SEED_PASSWORD set (10+ characters), the reset also creates one test login per role. */
+    const pw = process.env.SEED_PASSWORD;
+    return { ok: true, demoLogins: validPassword(pw) ? await ensureDemoLogins(pw) : [] };
+  });
   app.post('/api/admin/load-test', { preHandler: [demoOnly, owner] }, async req => {
     const n = Number((req.body as any)?.orders); if (![1000, 5000, 20000].includes(n)) throw new Rule('Choose 1,000, 5,000 or 20,000 orders.');
     const t = performance.now(), r = await loadTest(n); return { ...r, totalMs: performance.now() - t };
