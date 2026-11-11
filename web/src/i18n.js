@@ -44,6 +44,7 @@ const PATTERNS = [
   [/^(Collection|Refund) (\S+)$/, (m, a, b) => `${a === 'Refund' ? 'استرداد' : 'تحصيل'} ${b}`],
   [/^(\d+) × (\S+) delivered$/, (m, a, b) => `${a} × ${b} تم تسليمها`],
   [/^(\d+) assignments?(.*)$/, (m, a, b) => `${a} إسناد${trText(b)}`],
+  [/^Receive (\S+) at the warehouse$/, (m, a) => `استلام ${a} في المخزن`],
   [/^Prepaid (.+)$/, (m, a) => `مدفوع مقدمًا ${a}`],
   [/^(\S+) channel$/, (m, a) => `قناة ${a}`],
   [/^channel (\S+)$/, (m, a) => `القناة ${a}`],
@@ -66,7 +67,8 @@ export function trText(s) {
     if (out === undefined && t.includes(' · ')) out = t.split(' · ').map(x => trText(x)).join(' · ');
     if (out === undefined) out = /\s/.test(t) || /^[^A-Za-z]/.test(t) ? t.replace(PHRASE_RE, m => AR[m]) : t;
   }
-  out = out.replace(/\bEGP\b/g, 'ج.م').replace(MONTH_RE, (m, a, b) => MONTHS[a || b]).replace(/(?<=\d) to (?=\d)/g, ' إلى ').replace(/\((\d+) units?\)/g, '($1 وحدة)');
+  /* Amounts read the Arabic way, number then currency, with the number kept intact (sign included). */
+  out = out.replace(/\bEGP (-?[\d,]+(?:\.\d+)?)/g, '\u2066$1\u2069 ج.م').replace(/\bEGP\b/g, 'ج.م').replace(MONTH_RE, (m, a, b) => MONTHS[a || b]).replace(/(?<=\d) to (?=\d)/g, ' إلى ').replace(/\((\d+) units?\)/g, '($1 وحدة)');
   if (out !== exact.get(t) && hasArabic(out)) out = out.replace(WORD_RE, w => AR[w]);
   const r = lead + out + trail;
   if (memo.size > 20000) memo.clear();
