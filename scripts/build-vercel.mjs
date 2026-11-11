@@ -35,7 +35,10 @@ await build({
   define: { __MIGRATIONS__: JSON.stringify(await Promise.all((await (await import('node:fs/promises')).readdir(path.join(root, 'db/migrations'))).filter(f => f.endsWith('.sql')).sort().map(async name => ({ name, sql: await (await import('node:fs/promises')).readFile(path.join(root, 'db/migrations', name), 'utf8') })))) },
   banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
 });
-await writeFile(path.join(fn, '.vc-config.json'), JSON.stringify({ runtime: 'nodejs22.x', handler: 'index.mjs', launcherType: 'Nodejs', shouldAddHelpers: false, supportsResponseStreaming: true, maxDuration: 60 }, null, 2));
+/* Run the API next to the database: each query is a round trip, so distance multiplies.
+   Frankfurt (fra1) matches a Neon database in eu-central-1. Override with FUNCTION_REGION. */
+const regions = (process.env.FUNCTION_REGION || 'fra1').split(',').map(x => x.trim()).filter(Boolean);
+await writeFile(path.join(fn, '.vc-config.json'), JSON.stringify({ runtime: 'nodejs22.x', handler: 'index.mjs', launcherType: 'Nodejs', shouldAddHelpers: false, supportsResponseStreaming: true, maxDuration: 60, regions }, null, 2));
 await writeFile(path.join(out, 'config.json'), JSON.stringify({ version: 3, routes: [
   { src: '^/assets/(.*)$', headers: { 'cache-control': 'public, max-age=31536000, immutable' }, continue: true },
   { src: '^/api/(.*)$', dest: '/api?__path=$1' },

@@ -75,6 +75,8 @@ DATABASE_URL="<demo database>" ALLOW_DEMO_SEED=1 SEED_PASSWORD="<password>" npm 
 
 **Large backups.** Vercel limits uploads to 4.5 MB, so restore larger backups from your computer with `npm run db:restore -- file.json`. `npm run db:backup -- file.json` writes one.
 
+**Region.** The API runs in Frankfurt (`fra1`) to sit next to a Neon database in `eu-central-1`. If your database is elsewhere, set `FUNCTION_REGION` (for example `iad1`) in Vercel. `/api/health` shows both regions and the database round-trip time.
+
 ## Scripts
 
 | Command | What it does |
