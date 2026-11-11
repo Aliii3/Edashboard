@@ -27,10 +27,14 @@ export function loadSnapshot() {
     try {
       if (Session.isDriver) { const d = await request('/api/snapshot/mine'); const v = d.version; delete d.version; Repo.load(d); Session.version = v; Session.onChange?.(); return; }
       const meta = await request('/api/version'), tables = {}, names = Object.keys(SCHEMA);
-      for (let i = 0; i < names.length; i++) {
-        const t = names[i], rows = tables[t] = []; let after = 0;
-        Session.onProgress?.(i, names.length);
-        for (;;) { const page = await request(`/api/snapshot?table=${t}&after=${after}`); for (const r of page.rows) rows.push(r); if (page.next === null) break; after = page.next; }
+      for (const t of names) tables[t] = [];
+      /* Usually one request: the server packs every table into it, and says where to continue if not. */
+      let next = { t: '', after: 0 };
+      while (next) {
+        const page = await request(`/api/snapshot/batch?t=${encodeURIComponent(next.t)}&after=${next.after}`);
+        for (const t in page.tables) for (const r of page.tables[t]) tables[t].push(r);
+        next = page.next;
+        Session.onProgress?.(next ? Math.max(0, names.indexOf(next.t)) : names.length, names.length);
       }
       Repo.load({ schema: meta.schema, workspaceId: 'ws-1', seq: {}, settings: meta.settings, roadmap: meta.roadmap, tables });
       Session.version = meta.v;

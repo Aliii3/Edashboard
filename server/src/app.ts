@@ -9,7 +9,7 @@ import { Rule, ROLES } from '@commerce-os/domain';
 import { pool, ensureColumns, migrateDb, describeDbError } from './db.ts';
 import { COOKIE, SESSION_DAYS, createSession, destroySession, destroyUserSessions, userFromToken, hashPassword, checkPassword, validPassword, dummyHash, tooManyAttempts, recordFailure, ensureAdmin, ensureDemoLogins } from './auth.ts';
 import { Forbidden, runCommand, resetDemo, loadTest, restore, ensureWorkspace, type User } from './store.ts';
-import { version, snapshotPage, driverSnapshot, changesSince, backupChunks, redactDelta } from './reads.ts';
+import { version, snapshotPage, snapshotBatch, driverSnapshot, changesSince, backupChunks, redactDelta } from './reads.ts';
 
 declare module 'fastify' { interface FastifyRequest { user: User | null } }
 /* Demo data tools: on outside production, or when DEMO_TOOLS=1 (for example on a preview deployment). */
@@ -59,7 +59,10 @@ export async function buildApp({ serveStatic = false } = {}) {
   /* Open /api/health in a browser to check the deployment's configuration. */
   app.get('/api/health', async (_req, reply) => {
     const report: any = { database: 'not checked', owner: 'unknown', settings: { DATABASE_URL: !!process.env.DATABASE_URL, ADMIN_EMAIL: !!process.env.ADMIN_EMAIL, ADMIN_PASSWORD: !!process.env.ADMIN_PASSWORD } };
-    try { await databaseReady(); report.database = 'connected, tables ready'; }
+    /* Where the server and the database run. Far apart, every query crosses that distance. */
+    report.serverRegion = process.env.VERCEL_REGION || 'local';
+    report.databaseRegion = (/\.([a-z]{2}-[a-z]+-\d)\./.exec(new URL(process.env.DATABASE_URL || 'postgres://x').hostname)?.[1]) || 'unknown';
+    try { await databaseReady(); report.database = 'connected, tables ready'; const t0 = performance.now(); await pool.query('SELECT 1'); report.databaseRoundTripMs = Math.round(performance.now() - t0); }
     catch (e: any) { report.database = 'error'; report.problem = e.message; return reply.code(503).send({ ok: false, ...report }); }
     const users = (await pool.query('SELECT count(*)::int AS n FROM users')).rows[0].n;
     report.owner = users ? `${users} login${users > 1 ? 's' : ''} exist` : process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD ? 'will be created on first sign-in' : 'missing: set ADMIN_EMAIL and ADMIN_PASSWORD';
@@ -94,6 +97,10 @@ export async function buildApp({ serveStatic = false } = {}) {
   app.get('/api/version', { preHandler: auth }, async req => version(req.user!));
   app.get<{ Querystring: { table?: string; after?: string } }>('/api/snapshot', { preHandler: staff }, async (req, reply) => {
     const body = await snapshotPage(String(req.query.table), Number(req.query.after) || 0, req.user!);
+    return body === null ? reply.code(400).send({ error: 'Unknown table.' }) : reply.type('application/json').send(body);
+  });
+  app.get<{ Querystring: { t?: string; after?: string } }>('/api/snapshot/batch', { preHandler: staff }, async (req, reply) => {
+    const body = await snapshotBatch(req.user!, req.query.t || undefined, Number(req.query.after) || 0);
     return body === null ? reply.code(400).send({ error: 'Unknown table.' }) : reply.type('application/json').send(body);
   });
   app.get('/api/snapshot/mine', { preHandler: auth }, async (req, reply) => req.user!.role === 'driver' ? driverSnapshot(req.user!) : reply.code(400).send({ error: 'Staff load the workspace with /api/snapshot.' }));

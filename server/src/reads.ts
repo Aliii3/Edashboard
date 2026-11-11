@@ -35,6 +35,35 @@ export async function snapshotPage(table: string, after: number, user: User) {
   if (next === null && r.rows.length === 4000) next = Number(r.rows.at(-1)._seq);
   return `{"rows":[${parts.join(',')}],"next":${next}}`;
 }
+/* The whole first load in as few requests as possible: every table is read in parallel, and rows
+   are packed into one response up to the size limit. If data is left over, `next` says where the
+   following request picks up. Same filtering by role as snapshotPage. */
+const BATCH_ROWS = 4000;
+export async function snapshotBatch(user: User, fromTable: string | undefined, fromAfter: number) {
+  await ensureColumns();
+  const start = fromTable ? TABLES.indexOf(fromTable) : 0; if (start < 0) return null;
+  const todo = TABLES.slice(start);
+  const fetched = await Promise.all(todo.map(async (t, i) => {
+    if (!canReadTable(user.role, t)) return { t, rows: [] as any[], more: false };
+    const after = i === 0 ? fromAfter : 0;
+    const hideFinance = t === 'events' && !seesCosts(user.role) ? ` AND audience IS DISTINCT FROM 'finance'` : '';
+    const r = await pool.query(`SELECT "_seq", ${colList(t)} FROM ${q(snake(t))} WHERE "_seq" > $1${hideFinance} ORDER BY "_seq" LIMIT ${BATCH_ROWS}`, [after]);
+    return { t, rows: r.rows, more: r.rows.length === BATCH_ROWS };
+  }));
+  const out: string[] = []; let size = 0;
+  for (const { t, rows, more } of fetched) {
+    const parts: string[] = []; let last = 0;
+    for (const row of rows) {
+      const x = redactRow(user.role, t, fromDb(row)); last = Number(row._seq); if (!x) continue;
+      const s = JSON.stringify(x);
+      if (size + s.length > PAGE_BYTES && size > 0) { out.push(`${JSON.stringify(t)}:[${parts.join(',')}]`); return `{"tables":{${out.join(',')}},"next":${JSON.stringify({ t, after: last - 1 })}}`; }
+      parts.push(s); size += s.length + 1;
+    }
+    out.push(`${JSON.stringify(t)}:[${parts.join(',')}]`);
+    if (more) return `{"tables":{${out.join(',')}},"next":${JSON.stringify({ t, after: last })}}`;
+  }
+  return `{"tables":{${out.join(',')}},"next":null}`;
+}
 /* A driver receives only their own deliveries and the orders behind them. */
 export async function driverSnapshot(user: User) {
   await ensureColumns();

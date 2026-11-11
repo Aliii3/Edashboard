@@ -182,6 +182,19 @@ test('staff only receive the figures their role may see', async () => {
   assert.deepEqual((await pool.query(`SELECT labor, overhead FROM boms WHERE id='TEE-IVR'`)).rows[0], bom);
   assert.equal((await call('ops', 'GET', '/api/snapshot?table=campaigns&after=0')).json().rows.every((c: any) => c.budget === 0), true);
 });
+test('the one-request first load returns exactly what table-by-table paging does', async () => {
+  for (const who of ['fin', 'ops', 'wh']) {
+    const all: Record<string, any[]> = {}; let next: any = { t: '', after: 0 }, requests = 0;
+    while (next) { const r = (await call(who, 'GET', `/api/snapshot/batch?t=${next.t}&after=${next.after}`)).json(); requests++; for (const t in r.tables) (all[t] ??= []).push(...r.tables[t]); next = r.next; }
+    assert.equal(requests, 1, 'the demo workspace fits in one request');
+    for (const t of Object.keys(all)) {
+      const paged: any[] = []; let after = 0;
+      for (;;) { const r = (await call(who, 'GET', `/api/snapshot?table=${t}&after=${after}`)).json(); paged.push(...r.rows); if (r.next === null) break; after = r.next; }
+      assert.deepEqual(all[t], paged, `${who} ${t}`);
+    }
+  }
+  assert.equal((await call('drv', 'GET', '/api/snapshot/batch')).status, 403);
+});
 test('closing the books locks past figures', async () => {
   await full();
   const yesterday = dateKey(new Date(Date.now() - 864e5).toISOString()), noonYesterday = new Date(yesterday + 'T10:00:00Z').toISOString();
