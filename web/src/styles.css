@@ -3,10 +3,12 @@
   --bg:#f5f7fc;--surface:#ffffffb8;--card:#fff;--ink:#141824;--ink2:#4a5166;--muted:#6b7286;--line:#e6e9f2;--line2:#dde1ec;
   --brand:#3b5bfd;--brand2:#2c48e8;--brand-tint:#eef1ff;--brand-line:#c9d2ff;
   --green:#0e9f6e;--red:#e5384f;--amber:#c27803;--blue:#2563eb;--purple:#7c4dff;--orange:#f76707;--focus:#3b5bfd;--radius:18px;
-  --glass-blur:blur(26px) saturate(190%);--glass:linear-gradient(135deg,#ffffffa6 0%,#ffffff4d 100%);--glass-hi:linear-gradient(135deg,#ffffffb3 0%,#ffffff4d 100%);--glass-edge:1px solid #ffffffb3;--glass-shadow:inset 0 1px 0 #ffffff,inset 0 0 0 1px #ffffff33,0 10px 34px #2a3a8a1f;--shadow-card:0 1px 2px #1a1f3608,0 8px 24px #1a1f360f;--shadow-raise:0 2px 4px #1a1f360a,0 14px 34px #1a1f361a}
+  --glass-blur:blur(16px) saturate(170%);--glass:linear-gradient(135deg,#ffffffa6 0%,#ffffff4d 100%);--glass-hi:linear-gradient(135deg,#ffffffb3 0%,#ffffff4d 100%);--glass-edge:1px solid #ffffffb3;--glass-shadow:inset 0 1px 0 #ffffff,inset 0 0 0 1px #ffffff33,0 10px 34px #2a3a8a1f;--shadow-card:0 1px 2px #1a1f3608,0 8px 24px #1a1f360f;--shadow-raise:0 2px 4px #1a1f360a,0 14px 34px #1a1f361a}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
 body{margin:0;min-height:100vh;color:var(--ink);font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",Roboto,sans-serif;padding:18px;-webkit-font-smoothing:antialiased;
-  background:radial-gradient(38vw 38vw at 6% 4%,#5b7cffa6 0%,transparent 68%),radial-gradient(40vw 40vw at 96% 6%,#b06bff99 0%,transparent 68%),radial-gradient(42vw 42vw at 92% 96%,#ff7aa88c 0%,transparent 68%),radial-gradient(44vw 44vw at 4% 96%,#25d6a08c 0%,transparent 68%),radial-gradient(30vw 30vw at 55% 45%,#ffc94a66 0%,transparent 70%),#e8ecf7;background-attachment:fixed}
+  background:#e8ecf7}
+/* The colour glows sit on their own fixed layer, so scrolling never repaints them. */
+body::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(38vw 38vw at 6% 4%,#5b7cffa6 0%,transparent 68%),radial-gradient(40vw 40vw at 96% 6%,#b06bff99 0%,transparent 68%),radial-gradient(42vw 42vw at 92% 96%,#ff7aa88c 0%,transparent 68%),radial-gradient(44vw 44vw at 4% 96%,#25d6a08c 0%,transparent 68%),radial-gradient(30vw 30vw at 55% 45%,#ffc94a66 0%,transparent 70%);transform:translateZ(0)}
 h1,h2,h3,p{margin:0}h1{font-size:28px;font-weight:650;letter-spacing:-.8px;line-height:1.15}h2{font-size:14.5px;font-weight:620;letter-spacing:-.2px}h3{font-size:13px;font-weight:600}
 a{color:inherit}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}
 button{border:1px solid var(--line2);border-radius:20px;background:#fff;padding:7px 13px;font-weight:550;font-size:12px;white-space:nowrap;color:var(--ink);transition:background .15s,border-color .15s,box-shadow .15s}
@@ -138,7 +140,7 @@ button[type=submit]:disabled{opacity:.6;cursor:progress}
 .kpi .metric-icon{border-radius:50%}
 @media(max-width:1180px){.hero{grid-template-columns:auto minmax(0,1fr)}.hero>.actions{grid-column:1/-1}.ov-main,.ov-bottom{grid-template-columns:minmax(0,1fr)}.kpi-grid.k4 .kpi:nth-child(3)::before{display:none}}
 @media(max-width:760px){.shell{grid-template-columns:minmax(0,1fr)}.rail,.top-actions{display:none!important}.hero{grid-template-columns:minmax(0,1fr);gap:14px}.hero-title{font-size:28px}.hero-stats{gap:12px}.kpi-grid .kpi::before{display:none}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media print{.rail,.top-actions{display:none!important}.shell{display:block}}
+@media print{.rail,.top-actions{display:none!important}.shell{display:block}body::before{display:none}}
 /* ---------- Motion: everything eases out like it's settling into place ---------- */
 :root{--flow:cubic-bezier(.22,1,.36,1);--spring:cubic-bezier(.34,1.4,.64,1)}
 html.lenis,html.lenis body{height:auto}.lenis.lenis-smooth{scroll-behavior:auto!important}.lenis.lenis-smooth [data-lenis-prevent]{overscroll-behavior:contain}.lenis.lenis-stopped{overflow:clip}
@@ -198,6 +200,10 @@ html[dir=rtl] input[type=email],html[dir=rtl] input[type=tel],html[dir=rtl] inpu
   .command-dock button{width:40px;height:40px}
   .tablewrap{-webkit-overflow-scrolling:touch}
 }
+
+/* Blur only the outer glass surfaces. Tiles inside a frosted card are already over a blurred
+   backdrop, so blurring them again costs GPU time on every scroll frame for no visible gain. */
+.kpi,.queue,.tile,.driver-card,.triad>div,.cash-formula>div,.flow>div,.note,.whynot,.mini-q,.kpi-grid .kpi{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}.rv{opacity:1!important;transform:none!important}}
 @media(max-width:1180px){.k4{grid-template-columns:repeat(2,minmax(0,1fr))}.cols,.thirds{grid-template-columns:minmax(0,1fr)}.nav-title{display:none}nav a.active .nav-title{display:inline}}

@@ -8,8 +8,14 @@ const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const EASE = t => 1 - Math.pow(1 - t, 3);
 let lenis = null, io = null, revealedTo = 0;
 
+/* Macs, iPhones, iPads and touch screens already scroll with smooth native momentum, and native
+   scrolling runs off the main thread at the screen's full refresh rate (120 Hz on recent Macs).
+   Script-driven smoothing would replace that with frames drawn from JavaScript, which Safari
+   caps at 60 fps. So the glide is only added for mouse wheels on other systems. */
+const platform = navigator.userAgentData?.platform || navigator.platform || '';
+const nativeMomentum = /Mac|iPhone|iPad|iPod/i.test(platform) || matchMedia('(pointer: coarse)').matches;
 export function startSmoothScroll() {
-  if (lenis || reduced()) return;
+  if (lenis || reduced() || nativeMomentum) return;
   /* lerp sets the glide: lower is a longer, softer trail behind the wheel. Nested scroll areas
      (tables, pop-ups, search results) keep their own native scrolling. */
   lenis = new Lenis({ autoRaf: true, lerp: 0.2, wheelMultiplier: 1, allowNestedScroll: true, prevent: n => !!n.closest?.('dialog, .search-results') });
