@@ -38,6 +38,7 @@ const SCHEMA = {
   production: { idx: ['sku'] },
   expenses: { idx: [] },
   events: { idx: ['orderId', 'driverId', 'customerId', 'deliveryId'] },
+  employees: { idx: [] }, attendance: { idx: ['employeeId', 'date'] },
 };
 
 /* Repository: normalized tables, primary and secondary indexes, undo-log transactions. */

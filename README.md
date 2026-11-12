@@ -33,6 +33,16 @@ If anything fails, nothing is saved.
 
 **Database rules.** PostgreSQL also enforces: unique payment, handover and settlement references; one active delivery per order; unique stock-movement keys; and an append-only stock journal and activity log.
 
+**Shipping flow.** A driver or courier can only be assigned once an order is Ready (packed). Ready can be set straight from Confirmed. `shipOrder` assigns a carrier and, in the same step, can record the pickup and send the parcel out. Shipping → Dispatch queue lists orders to pack, ready to ship and waiting for pickup, with bulk actions.
+
+**In-store sales.** `storeSale` confirms, hands over and records payment for a counter sale in one step. It is stored as a delivery with mode `store` and no carrier, and payments go straight to the business. Without a phone number the sale goes to one shared "Walk-in customer" record.
+
+**Printed documents.** Shipping labels and invoices print at 10 × 10 or 10 × 15 cm for thermal label printers, with a Code 128 barcode of the order number (`web/src/print.js`). The phone and return address come from Settings → Workspace.
+
+**Courier reconciliation.** Recording a courier's payment checks the ticked deliveries against the amount received. A courier statement (CSV, or rows pasted from Excel) ticks matching deliveries by tracking number, delivery ID or order number.
+
+**Staff attendance.** Employees and one attendance record per person per day (Present, Late, Absent, Leave, Day off), with a daily sheet, a monthly sheet and CSV export. Owner and operations record it; finance can read it; warehouse and drivers never receive it.
+
 **Closed periods.** Finance closes the books through a date (Finance → Closed periods). After that, no handover, settlement, campaign spend or expense can be added, back-dated or removed on or before that date, so the closed figures stay fixed. The figures at closing are stored, and the integrity check compares them with today's figures for the same dates. Only the owner can reopen, with a reason, and every close and reopen is kept.
 
 ## Run it locally
@@ -95,5 +105,6 @@ DATABASE_URL="<demo database>" ALLOW_DEMO_SEED=1 SEED_PASSWORD="<password>" npm 
 - **One change at a time.** Changes are serialized across the whole workspace through the database lock. That's correct and simple, and suits an operations team. Thousands of changes per minute would need finer-grained locks.
 - **Full workspace in each staff browser.** Each staff browser holds the workspace, loaded in pages at sign-in. Very large histories will need server-side search and reports.
 - **Read limits are by role, not by record.** Operations and warehouse receive every order and customer, without costs and profit. Limiting staff to some customers or areas would need record-level rules.
+- **Courier statements are CSV or pasted rows.** Excel files must be saved as CSV or copied and pasted. The printed barcode has not yet been tested with a physical scanner.
 - **No integrations.** There are no live connections to stores, couriers, ad platforms or payment gateways.
 - **Not accounting software.** There's no tax handling, and one workspace per deployment. Restoring a backup replaces closed periods along with everything else.

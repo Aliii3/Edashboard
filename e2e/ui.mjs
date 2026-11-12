@@ -14,8 +14,8 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  const clickBtn=(t,scope='#main')=>p.locator(`${scope} button:visible`,{hasText:t}).first().click();
  const ev=f=>p.evaluate(f);
  // every screen and tab renders non-empty
- for(const n of ['overview','orders','order360','crm','inventory','shipping','finance','campaigns','settings','roadmap']){await go('#/'+n);const t=await p.locator('#main h1').first().innerText();ok('screen '+n,t.length>0);await shot('s-'+n)}
- for(const [hash,tabs] of [['#/inventory',['Finished goods','Raw materials','Production','BOM & costing','Reservations','Movement journal']],['#/shipping',['Dispatch queue','External couriers','Private delivery','Failed follow-up','Returns & exchanges']],['#/finance',['Profit & loss','Courier reconciliation','Driver reconciliation','Operating expenses','Customer collections','Business cash & refunds','Closed periods']],['#/settings',['Workspace','Operational rules','Drivers & couriers','Data sources','Roles','Activity history','Data & scale','Limitations']]]){await go(hash);for(const t of tabs){await p.locator('.tabs button',{hasText:t}).first().click();await p.waitForTimeout(30);ok(`tab ${hash} ${t}`,(await p.locator('#main').innerText()).length>100);const name=(hash+t).replace(/[^a-z]/gi,'');await shot('t-'+name)}}
+ for(const n of ['overview','orders','order360','crm','products','inventory','shipping','finance','campaigns','staff','settings','roadmap']){await go('#/'+n);const t=await p.locator('#main h1').first().innerText();ok('screen '+n,t.length>0);await shot('s-'+n)}
+ for(const [hash,tabs] of [['#/inventory',['Finished goods','Raw materials','Production','BOM & costing','Reservations','Movement journal']],['#/shipping',['Dispatch queue','External couriers','Private delivery','Failed follow-up','Returns & exchanges']],['#/finance',['Profit & loss','Courier reconciliation','Driver cash','Operating expenses','Customer collections','Business cash & refunds','Closed periods']],['#/staff',['Today','Monthly sheet','Employees']],['#/settings',['Workspace','Operational rules','Drivers & couriers','Data sources','Roles','Activity history','Data & scale','Limitations']]]){await go(hash);for(const t of tabs){await p.locator('.tabs button',{hasText:t}).first().click();await p.waitForTimeout(30);ok(`tab ${hash} ${t}`,(await p.locator('#main').innerText()).length>100);const name=(hash+t).replace(/[^a-z]/gi,'');await shot('t-'+name)}}
  // Integrity on screen
  await go('#/settings');await p.locator('.tabs button',{hasText:'Data & scale'}).click();ok('checks pass ui',(await p.locator('#main').innerText()).includes('checks pass'));
  // New multi-line order
@@ -31,8 +31,9 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  await p.waitForTimeout(50);
  ok('why unavailable',(await p.locator('.whynot').first().innerText()).includes('unavailable'));
  await clickBtn('Confirm and reserve');await p.waitForTimeout(60);ok('confirmed',await ev(`orderOf(${oid}).status`)==='Confirmed');
- await clickBtn('Start processing');await p.waitForTimeout(60);await clickBtn('Mark ready');await p.waitForTimeout(60);
- await clickBtn('Assign delivery');await p.waitForSelector('dialog[open]');await p.selectOption('select[name=mode]','driver');await p.selectOption('select[name=driver]','DRV-1');await p.click('dialog button[type=submit]');await p.waitForTimeout(80);
+ ok('assign needs ready',(await p.locator('.whynot').first().textContent()).includes('Mark the order Ready first'));
+ await clickBtn('Mark ready');await p.waitForTimeout(60);ok('ready straight from confirmed',await ev(`orderOf(${oid}).status`)==='Ready');
+ await clickBtn('Assign and ship');await p.waitForSelector('dialog[open]');await p.selectOption('select[name=mode]','driver');await p.selectOption('select[name=driver]','DRV-1');await p.locator('dialog input[name=then][value=assigned]').check();await p.click('dialog button[type=submit]');await p.waitForTimeout(80);
  const did=await ev(`activeDelivery(orderOf(${oid})).id`);ok('assigned',!!did);
  ok('driver link',await p.locator('#main a[href="#/drivers/DRV-1"]').count()>0);
  await shot('o-360');
@@ -52,13 +53,13 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  await p.locator('.driver-card a',{hasText:'Mahmoud Fawzy'}).click();await p.waitForTimeout(80);ok('profile route',(await ev(()=>location.hash))==='#/drivers/DRV-1');ok('custody heading',(await p.locator('#main').innerText()).includes('Currently with this driver'));ok('delivery shows in custody',(await p.locator('.prominent').innerText()).includes(did));await shot('d-profile');
  const heldB=await ev(`driverCash('DRV-1').outstanding`);ok('held 1000',heldB===1000,heldB);
  await p.locator('.tabs button',{hasText:'Cash'}).click();await p.waitForTimeout(40);await shot('d-cash');
- await clickBtn('Record cash handover');await p.waitForSelector('dialog[open]');await shot('m-handover');
- await p.fill('input[name=ref]','HO-UI-1');await p.locator('[data-alloc]').first().fill('600');await p.locator('[data-alloc]').first().blur();await p.click('dialog button[type=submit]');await p.waitForTimeout(80);
+ await clickBtn('Receive cash from driver');await p.waitForSelector('dialog[open]');await shot('m-handover');
+ await p.fill('input[name=ref]','HO-UI-1');await p.fill('dialog input[name=amount]','600');await p.waitForTimeout(30);ok('split follows amount',Number(await p.locator('[data-alloc]').first().inputValue())===600);await p.click('dialog button[type=submit]');await p.waitForTimeout(80);
  ok('handover partial',await ev(`driverCash('DRV-1').outstanding`)===400);
- await clickBtn('Record cash handover');await p.waitForSelector('dialog[open]');await p.fill('input[name=ref]','HO-UI-1');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('dup ref msg',(await p.locator('#formError').innerText()).includes('already exists'));
- await p.fill('input[name=ref]','HO-UI-2');await p.locator('[data-alloc]').first().fill('5000');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('excess blocked',(await p.locator('#formError').innerText()).length>0,await p.locator('#formError').innerText());await p.click('dialog [data-close]');
+ await clickBtn('Receive cash from driver');await p.waitForSelector('dialog[open]');await p.fill('input[name=ref]','HO-UI-1');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('dup ref msg',(await p.locator('#formError').innerText()).includes('already exists'));
+ await p.fill('input[name=ref]','HO-UI-2');await p.fill('dialog input[name=amount]','5000');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('excess blocked',(await p.locator('#formError').innerText()).length>0,await p.locator('#formError').innerText());await p.click('dialog [data-close]');
  // consistency across screens
- await go('#/finance');await p.locator('.tabs button',{hasText:'Driver reconciliation'}).click();await p.waitForTimeout(40);ok('finance shows driver',(await p.locator('#main').innerText()).includes('EGP 400'));
+ await go('#/finance');await p.locator('.tabs button',{hasText:'Driver cash'}).click();await p.waitForTimeout(40);ok('finance shows driver',(await p.locator('#main').innerText()).includes('EGP 400'));
  // Delivery details modal
  await go(`#/orders/${oid}`);await p.waitForTimeout(60);await p.locator('#main .delivery .link').first().click();await p.waitForSelector('dialog[open]');await shot('m-delivery');await p.click('dialog [data-close]');
  // Return undelivered unit
@@ -91,11 +92,36 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  // campaign recalculation + empty campaign
  await go('#/campaigns');await p.waitForTimeout(40);const prof=await ev(()=>totals().profit);await p.locator('tr',{hasText:'Winter teaser'}).locator('button',{hasText:'Add spend'}).click();await p.waitForSelector('dialog[open]');await p.fill('input[name=amount]','100');await p.click('dialog button[type=submit]');await p.waitForTimeout(60);ok('empty spend hits profit',Math.abs(await ev(()=>totals().profit)-(prof-100))<.01);await shot('s-campaigns2');
  // courier settlement
- await go('#/finance');await p.locator('.tabs button',{hasText:'Courier reconciliation'}).click();await p.waitForTimeout(40);await clickBtn('Record Bosta settlement');await p.waitForSelector('dialog[open]');await p.fill('input[name=ref]','BST-UI-1');await shot('m-settle');await p.click('dialog button[type=submit]');await p.waitForTimeout(80);ok('settlement',await ev(()=>Repo.count('settlements','ref','BST-UI-1'))===1);
+ await go('#/finance');await p.locator('.tabs button',{hasText:'Courier reconciliation'}).click();await p.waitForTimeout(40);await clickBtn('Record payment from Bosta');await p.waitForSelector('dialog[open]');await p.fill('input[name=ref]','BST-UI-1');await shot('m-settle');await p.click('dialog button[type=submit]');await p.waitForTimeout(80);ok('settlement',await ev(()=>Repo.count('settlements','ref','BST-UI-1'))===1);
  // new driver + availability
  await go('#/shipping');await p.locator('.tabs button',{hasText:'Private delivery'}).click();await clickBtn('+ New driver');await p.waitForSelector('dialog[open]');await p.fill('input[name=name]','Test Driver');await p.fill('input[name=phone]','123');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('phone validated',(await p.locator('#formError').innerText()).includes('Egyptian'));await p.fill('input[name=phone]','01033334444');await p.click('dialog button[type=submit]');await p.waitForTimeout(100);ok('driver made',(await ev(()=>location.hash)).startsWith('#/drivers/DRV-7'));
  // global search
  await p.fill('#dock input','Mahmoud');await p.waitForTimeout(40);ok('global search',(await p.locator('#searchResults').innerText()).includes('Mahmoud'));await p.locator('#searchResults a').first().click();await p.waitForTimeout(60);
+ // ship in one step: mark ready in the dispatch queue, then assign and record the pickup together
+ const rdy=await ev(()=>Repo.all('orders').filter(x=>x.status==='Confirmed'||x.status==='Processing').sort((a,b)=>a.id-b.id)[0]?.id);
+ if(rdy){await go('#/shipping');await p.locator('.tabs button',{hasText:'Dispatch queue'}).click();await p.waitForTimeout(40);await shot('ship-queue');await p.locator(`#main tr:has([data-sel="${rdy}"]) button`,{hasText:'Mark ready'}).click();await p.waitForTimeout(100);ok('marked ready in queue',await ev(`orderOf(${rdy}).status`)==='Ready');
+  await go('#/orders/'+rdy);await clickBtn('Assign and ship');await p.waitForSelector('dialog[open]');await p.selectOption('dialog select[name=mode]','courier');await p.fill('dialog input[name=tracking]','AWB-UI-9');await shot('m-ship');await p.click('dialog button[type=submit]');await p.waitForTimeout(120);
+  ok('shipped in one step',await ev(`activeDelivery(orderOf(${rdy}))?.status`)==='Picked Up');ok('tracking saved',await ev(`activeDelivery(orderOf(${rdy}))?.tracking`)==='AWB-UI-9');
+  const html=await ev(`printHtml([${rdy}],'both','100x100')`);ok('label and invoice html',html.includes('@page{size:100mm 100mm')&&html.includes('class="bc"')&&html.includes(`#${rdy}`)&&html.includes('AWB-UI-9')&&(html.match(/class="pg/g)||[]).length===2);
+  await clickBtn('Print label or invoice');await p.waitForSelector('dialog[open]');await p.selectOption('dialog select[name=size]','100x100');await p.click('dialog button[type=submit]');await p.waitForTimeout(200);ok('print sent',(await toast()).includes('print'));ok('print size remembered',await ev(()=>JSON.parse(localStorage.getItem('cos_print')).size)==='100x100');}
+ else ok('an order to pack exists',false);
+ // delivery-status chips filter the orders list
+ await go('#/orders');await p.locator('.chip',{hasText:'Out for Delivery'}).first().click();await p.waitForTimeout(60);ok('chip filters',await ev(()=>filteredOrders().length>0&&filteredOrders().every(o=>latestDelivery(o)?.status==='Out for Delivery')));await p.locator('.chip',{hasText:'All'}).first().click();await p.waitForTimeout(40);
+ // counter sale: paid and handed over in one step, with change worked out
+ await clickBtn('In-store sale');await p.waitForSelector('dialog[open]');await p.selectOption('[data-dl=sku][data-i="0"]','TOT-NAT');await p.fill('dialog input[name=cash]','500');await p.waitForTimeout(40);ok('change due',(await p.locator('#changeDue').innerText()).includes('150'),await p.locator('#changeDue').innerText());await shot('m-store-sale');
+ const ns=await ev(()=>Repo.all('orders').length);await p.click('dialog button[type=submit]');await p.waitForTimeout(150);const so=await ev(()=>{const o=Repo.all('orders').at(-1);return {n:Repo.all('orders').length,st:o.status,ch:o.channel,pay:paymentStatus(o)}});ok('store sale',so.n===ns+1&&so.st==='Delivered'&&so.ch==='In-store'&&so.pay==='Paid',JSON.stringify(so));
+ // courier statement pasted from Excel ticks the matching delivery
+ const cdel=await ev(()=>{const d=Repo.by('deliveries','carrierKey','courier:MYLERZ').find(x=>(x.completedAt||x.returnedAt)&&x.tracking&&Math.abs(courierDeliveryBalance(x).gap)>1);return d&&{id:d.id,t:d.tracking,g:courierDeliveryBalance(d).gap}});
+ if(cdel){await go('#/finance');await p.locator('.tabs button',{hasText:'Courier reconciliation'}).click();await p.waitForTimeout(40);await shot('fin-courier');await clickBtn('Record payment from Mylerz');await p.waitForSelector('dialog[open]');await p.locator('dialog summary',{hasText:'Match the courier'}).click();
+  await p.fill('dialog textarea[name=stmtText]',`AWB\tCOD amount\n${cdel.t}\t${cdel.g}\nNOPE-1\t50\n`);await p.waitForTimeout(80);const res=await p.locator('#stmtResult').innerText();
+  ok('statement matched',/Matched and ticked\s*1/.test(res),res);ok('statement unmatched listed',res.includes('NOPE-1'));ok('only matched ticked',await p.locator('dialog [data-inc]:checked').count()===1);await shot('m-statement');
+  await p.fill('dialog input[name=ref]','MYZ-UI-1');await p.click('dialog button[type=submit]');await p.waitForTimeout(150);ok('statement payment saved',await ev(`Math.abs(courierDeliveryBalance(Repo.get('deliveries','${cdel.id}')).gap)<0.01`));}
+ else ok('a courier delivery to settle exists',false);
+ // product profile and staff attendance
+ await go('#/products');ok('products list',(await p.locator('#main').innerText()).includes('Units sold'));await p.locator('#main a[href="#/products/TEE-IVR"]').first().click();await p.waitForTimeout(80);const ptx=await p.locator('#main').innerText();ok('product profile',ptx.includes('Revenue by week')&&ptx.includes('Top customers'),ptx.slice(0,200));await shot('product');
+ await go('#/staff');const emp=await ev(()=>Repo.all('employees').find(e=>e.active!==false).id);await p.locator(`#main tr:has(a[href="#/staff/${emp}"]) button`,{hasText:'Late'}).click();await p.waitForTimeout(120);ok('attendance saved',await ev(`Repo.get('attendance','ATT-${emp}-'+today())?.status`)==='Late');
+ await clickBtn('Mark everyone not recorded as present');await p.waitForTimeout(150);ok('all recorded',await ev(()=>Repo.all('employees').filter(e=>e.active!==false).every(e=>Repo.get('attendance',`ATT-${e.id}-${today()}`))));await shot('staff-today');
+ await p.locator('.tabs button',{hasText:'Monthly sheet'}).click();await p.waitForTimeout(60);ok('monthly sheet',await p.locator('table.sheet tbody tr').count()>=5);await shot('staff-month');
  // integrity after everything
  const bad=await ev(()=>integrity().filter(x=>!x.ok));ok('integrity after flows',!bad.length,JSON.stringify(bad));
  // receive a returned parcel, charging the customer the shipping fee
@@ -134,7 +160,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  // reset
  await go('#/settings');await p.locator('.tabs button',{hasText:'Data & scale'}).click();await clickBtn('Reset demo data');await p.waitForSelector('dialog[open]');await p.click('dialog button[type=submit]');await p.waitForTimeout(150);ok('reset',await ev(()=>Repo.all('orders').length)<300);
  // mobile
- await p.setViewportSize({width:390,height:844});for(const h of ['#/overview','#/orders','#/drivers/DRV-2','#/finance','#/shipping']){await go(h);await p.waitForTimeout(50);const over=await ev(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth);ok('no h-scroll '+h,over<=0,over);await shot('mob-'+h.replace(/\W/g,''))}
+ await p.setViewportSize({width:390,height:844});for(const h of ['#/overview','#/orders','#/drivers/DRV-2','#/finance','#/shipping','#/products/TEE-IVR','#/staff']){await go(h);await p.waitForTimeout(50);const over=await ev(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth);ok('no h-scroll '+h,over<=0,over);await shot('mob-'+h.replace(/\W/g,''))}
  // Arabic: the switch turns the interface right to left and translates it, then back to English
  await p.setViewportSize({width:1440,height:900});await go('#/overview');await p.click('#topActions .lang-toggle');await p.waitForSelector('html[dir=rtl]');await p.waitForSelector('#main .hero');await p.waitForTimeout(300);
  ok('arabic nav',(await p.locator('nav').innerText()).includes('الطلبات'));ok('arabic money',(await p.locator('#main').innerText()).includes('ج.م'));await shot('ar-overview');

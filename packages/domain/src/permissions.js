@@ -6,7 +6,7 @@ const OPS = 'operations', WH = 'warehouse', FIN = 'finance', DRV = 'driver';
 export const COMMAND_ROLES = {
   createOrder: [OPS], createOrderWithCustomer: [OPS], importOrders: [OPS], addOrderNote: [OPS, WH, FIN], confirmOrder: [OPS], advanceOrder: [OPS, WH], cancelOrder: [OPS],
   attribute: [FIN],
-  assign: [OPS], reassign: [OPS], driverHandover: [OPS], pickup: [OPS, WH], setDeliveryStatus: [OPS, DRV], deliver: [OPS, DRV], collect: [OPS, FIN, DRV], prepay: [OPS, FIN], startReturn: [OPS, DRV], receiveAtWarehouse: [OPS, WH],
+  assign: [OPS], shipOrder: [OPS], setTracking: [OPS, WH], storeSale: [OPS], reassign: [OPS], driverHandover: [OPS], pickup: [OPS, WH], setDeliveryStatus: [OPS, DRV], deliver: [OPS, DRV], collect: [OPS, FIN, DRV], prepay: [OPS, FIN], startReturn: [OPS, DRV], receiveAtWarehouse: [OPS, WH],
   recordHandover: [FIN], addDriverExpense: [OPS, FIN, DRV], decideDriverExpense: [FIN], resolveDiscrepancy: [FIN], recordSettlement: [FIN], refund: [FIN],
   openCase: [OPS], acceptReturn: [OPS, WH], rejectCase: [OPS, WH], createReplacement: [OPS], closeCase: [OPS, FIN],
   adjustStock: [OPS, WH], createProduction: [OPS, WH], startProduction: [OPS, WH], completeProduction: [OPS, WH], cancelProduction: [OPS, WH], saveSku: [OPS], receiveMaterial: [OPS, WH],
@@ -14,16 +14,17 @@ export const COMMAND_ROLES = {
   saveCampaign: [FIN], addSpend: [FIN], addExpense: [FIN], removeExpense: [FIN],
   saveDriver: [OPS], setAvailability: [OPS], saveCourier: [], saveSettings: [], setRoadmap: [],
   closePeriod: [FIN], reopenPeriod: [],
+  saveEmployee: [OPS], recordAttendance: [OPS], recordAttendanceDay: [OPS], removeAttendance: [OPS],
 };
 /* The owner may run everything in the table. Anything not in the table can't be called at all. */
 export const canRun = (role, command) => Object.hasOwn(COMMAND_ROLES, command) && (role === 'owner' || COMMAND_ROLES[command].includes(role));
 /* Commands a driver may run, and how to find the driver they must belong to. */
 export const DRIVER_SCOPE = { setDeliveryStatus: 'delivery', deliver: 'delivery', collect: 'delivery', startReturn: 'delivery', addDriverExpense: 'driverField' };
 export const ROLE_SCREENS = {
-  owner: ['overview', 'orders', 'order360', 'crm', 'inventory', 'shipping', 'driver', 'finance', 'campaigns', 'settings', 'roadmap'],
-  operations: ['overview', 'orders', 'order360', 'crm', 'inventory', 'shipping', 'driver'],
-  warehouse: ['orders', 'order360', 'inventory', 'shipping', 'driver'],
-  finance: ['overview', 'orders', 'order360', 'crm', 'driver', 'shipping', 'finance', 'campaigns'],
+  owner: ['overview', 'orders', 'order360', 'crm', 'products', 'inventory', 'shipping', 'driver', 'finance', 'campaigns', 'staff', 'settings', 'roadmap'],
+  operations: ['overview', 'orders', 'order360', 'crm', 'products', 'inventory', 'shipping', 'driver', 'staff'],
+  warehouse: ['orders', 'order360', 'products', 'inventory', 'shipping', 'driver'],
+  finance: ['overview', 'orders', 'order360', 'crm', 'products', 'driver', 'shipping', 'finance', 'campaigns', 'staff'],
   driver: ['driver'],
 };
 
@@ -31,12 +32,12 @@ export const ROLE_SCREENS = {
    the database, so hidden figures never reach the browser.
    Owner and finance see costs and profit. Operations and warehouse see prices and
    collections, but not product costs, profit, campaign spend or company expenses.
-   Warehouse also doesn't see the customer contact log. Drivers get their own
+   Warehouse also doesn't see the customer contact log or staff attendance. Drivers get their own
    deliveries only (see the driver snapshot on the server). */
 export const COST_ROLES = ['owner', 'finance'];
 export const seesCosts = role => COST_ROLES.includes(role);
 const COST_FIELDS = { lines: ['unitCost'], materials: ['cost'], boms: ['labor', 'overhead'], production: ['unitCost'], campaigns: ['budget', 'reportedRoas'] };
-const HIDDEN_TABLES = { operations: ['spend', 'expenses'], warehouse: ['spend', 'expenses', 'contacts'], driver: ['spend', 'expenses', 'contacts', 'settlements', 'settlementAllocs', 'campaigns', 'materials', 'boms', 'production', 'movements', 'couriers'] };
+const HIDDEN_TABLES = { operations: ['spend', 'expenses'], warehouse: ['spend', 'expenses', 'contacts', 'employees', 'attendance'], driver: ['spend', 'expenses', 'contacts', 'settlements', 'settlementAllocs', 'campaigns', 'materials', 'boms', 'production', 'movements', 'couriers', 'employees', 'attendance'] };
 export const canReadTable = (role, table) => !(HIDDEN_TABLES[role] || []).includes(table);
 /* Returns the row as this role may see it, or null when the role may not see it at all. */
 export function redactRow(role, table, row) {

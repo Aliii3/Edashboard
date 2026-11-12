@@ -28,10 +28,10 @@ throws('no skip',()=>Commands.advanceOrder(o.id,'Ready'),/Processing/);
 throws('assign before confirm',()=>Commands.assign(o.id,'driver','DRV-1'),/Confirm/);
 let onh=stockOnHand('TRS-BLK'),res=reservedOf('TRS-BLK');Commands.confirmOrder(o.id);ok('reserve',reservedOf('TRS-BLK')===res+2&&stockOnHand('TRS-BLK')===onh);
 throws('double confirm',()=>Commands.confirmOrder(o.id));
+throws('assign before ready',()=>Commands.assign(o.id,'courier','BOSTA'),/Ready first/);Commands.advanceOrder(o.id,'Ready');ok('ready straight from confirmed',Repo.get('orders',o.id).status==='Ready');
 let d=Commands.assign(o.id,'driver','DRV-1');throws('dup active',()=>Commands.assign(o.id,'driver','DRV-2'),/Already/);
-throws('pickup not ready',()=>Commands.pickup(d.id),/Ready/);
 let d2=Commands.reassign(d.id,'driver','DRV-2','zone');ok('prior closed',Repo.get('deliveries',d.id).status==='Cancelled Assignment');ok('one active',activeDelivery(o).id===d2.id);
-Commands.advanceOrder(o.id,'Processing');Commands.advanceOrder(o.id,'Ready');Commands.pickup(d2.id);
+Commands.pickup(d2.id);
 ok('dispatch',stockOnHand('TRS-BLK')===onh-2&&reservedOf('TRS-BLK')===res);ok('order shipped',Repo.get('orders',o.id).status==='Shipped');
 throws('reassign after pickup',()=>Commands.reassign(d2.id,'driver','DRV-3'),/pickup/);
 throws('pickup twice',()=>Commands.pickup(d2.id));
@@ -110,7 +110,7 @@ let c0=Commands.saveCampaign({name:'Empty',platform:'Meta',start:'2026-01-01',en
 // attribution change recalcs
 let cA=Repo.all('campaigns')[0];let oA=Repo.by('orders','campaignId',cA.id)[0];let aB=allocationOf(oA);let oB=Repo.all('orders').find(x=>!x.campaignId&&x.status!=='Cancelled');Commands.attribute(oB.id,cA.id,'fix');ok('alloc recalculated',allocationOf(oA)<aB);
 // inactive driver preserved + blocked
-throws('inactive assign',()=>{let x=mk([{sku:'TEE-IVR',qty:1}]);Commands.confirmOrder(x.id);Commands.assign(x.id,'driver','DRV-6')},/inactive/);ok('history kept',driverStats('DRV-6').deliveries.length>=3);
+throws('inactive assign',()=>{let x=mk([{sku:'TEE-IVR',qty:1}]);prep(x);Commands.assign(x.id,'driver','DRV-6')},/inactive/);ok('history kept',driverStats('DRV-6').deliveries.length>=3);
 // exchange credit
 let o8=mk([{sku:'TEE-IVR',qty:1}]);prep(o8);let d8=Commands.assign(o8.id,'driver','DRV-1');Commands.pickup(d8.id);Commands.setDeliveryStatus(d8.id,'Out for Delivery');Commands.deliver(d8.id,{collection:{amount:490,method:'Cash'}});let x8=Commands.openCase({orderId:o8.id,type:'Exchange',items:[{lineId:linesOf(o8)[0].id,qty:1}],reason:'size'});throws('replacement before receive',()=>Commands.createReplacement(x8,{sku:'TEE-BLK',qty:1}),/Receive/);Commands.acceptReturn(x8);let col=totals().collected;let r8=Commands.createReplacement(x8,{sku:'TEE-BLK',qty:1});ok('credit moves',calc(r8).paid===490&&calc(o8).paid===0);ok('credit not cash',totals().collected===col);throws('replacement twice',()=>Commands.createReplacement(x8,{sku:'TEE-BLK',qty:1}),/already/);
 const bad2=integrity().filter(x=>!x.ok);ok('final integrity',!bad2.length,JSON.stringify(bad2));
@@ -119,4 +119,76 @@ t=Date.now();const r=runLoadTest(5000);console.log('load',JSON.stringify(r),'ord
 console.log('bytes',JSON.stringify(Repo.data).length);
 console.log(`pass ${pass} fail ${failN}`);assert.equal(failN,0,`${failN} checks failed`);
 
+});
+
+test('in-store sales, one-step shipping, tracking, attendance and product figures', async () => {
+  const { WALK_IN, productStats, lateMinutes, dateKey, Clock } = await import('../src/index.js');
+  buildSeedWorkspace();
+  const throws = (fn, re) => assert.throws(fn, e => e instanceof Rule && (!re || re.test(e.message)), String(re));
+  /* Seed ran the new commands without breaking any check. */
+  assert.deepEqual(integrity().filter(x => !x.ok), []);
+  assert.ok(Repo.all('deliveries').filter(d => d.mode === 'store').length >= 4, 'seed has store sales');
+  assert.ok(Repo.all('attendance').length > 40, 'seed has attendance');
+
+  /* A counter sale is delivered and paid at once, with the cash held by the business. */
+  Commands.adjustStock({ item: 'TEE-IVR', itemType: 'sku', qty: 20, reason: 't' });
+  const before = totals(), onHand = stockOnHand('TEE-IVR'), held = reservedOf('TEE-IVR');
+  throws(() => Commands.storeSale({ lines: [{ sku: 'TEE-IVR', qty: 2 }], payments: [{ method: 'Cash', amount: 500 }] }), /paid in full/);
+  assert.equal(stockOnHand('TEE-IVR'), onHand, 'a rejected sale changes nothing');
+  const o = Commands.storeSale({ lines: [{ sku: 'TEE-IVR', qty: 2, discount: 80 }], discount: 100, payments: [{ method: 'Cash', amount: 500 }, { method: 'Card', amount: 300, ref: 'POS-T1' }] });
+  assert.equal(o.status, 'Delivered'); assert.equal(o.channel, 'In-store'); assert.equal(o.customerId, WALK_IN);
+  assert.equal(stockOnHand('TEE-IVR'), onHand - 2); assert.equal(reservedOf('TEE-IVR'), held, 'no reservation left behind');
+  const c = calc(o);
+  assert.equal(c.revenue, 800); assert.equal(c.collected, 800); assert.equal(paymentStatus(o), 'Paid'); assert.equal(settlementStatus(o), 'None'); assert.equal(collectionOutcome(o), 'Reconciled');
+  assert.equal(round2(totals().revenue - before.revenue), 800);
+  assert.equal(round2(totals().bizcash - before.bizcash), round2(800 - 300 * 0.025), 'money reaches the business at once, less the card fee');
+  assert.equal(activeDelivery(o), undefined, 'no open delivery');
+  assert.deepEqual(integrity().filter(x => !x.ok), []);
+  /* A returning walk-in reuses the same customer; a phone number links a real customer. */
+  const o2 = Commands.storeSale({ lines: [{ sku: 'TEE-IVR', qty: 1 }], payments: [{ method: 'Cash', amount: 490 }] });
+  assert.equal(o2.customerId, WALK_IN); assert.equal(Repo.all('customers').filter(x => x.id === WALK_IN).length, 1);
+  const known = Repo.all('customers')[4];
+  assert.equal(Commands.storeSale({ customer: { phone: known.phone }, lines: [{ sku: 'TEE-IVR', qty: 1 }], payments: [{ method: 'InstaPay', amount: 490 }] }).customerId, known.id);
+  /* Returns work like any delivered order. */
+  const cs = Commands.openCase({ orderId: o2.id, type: 'Return', items: [{ lineId: linesOf(o2)[0].id, qty: 1 }], reason: 'size', returnCost: 0 });
+  Commands.acceptReturn(cs); assert.equal(calc(o2).revenue, 0); Commands.refund(o2.id, { amount: 490, source: 'business', ref: 'RF-STORE-T' });
+  assert.equal(paymentStatus(o2), 'Not due');
+  throws(() => Commands.storeSale({ lines: [{ sku: 'SET-OAT', qty: 400 }], payments: [{ method: 'Cash', amount: 400 * 1650 }] }), /Not enough stock/);
+
+  /* Ship in one step: assign, pickup and out for delivery. Ready is still required first. */
+  const mk = () => Commands.createOrder({ customerId: Repo.all('customers')[1].id, lines: [{ sku: 'TEE-IVR', qty: 1 }], channel: 'Phone' });
+  const s1 = mk(); Commands.confirmOrder(s1.id);
+  throws(() => Commands.shipOrder(s1.id, 'driver', 'DRV-1', { then: 'out' }), /Ready first/);
+  assert.equal(activeDelivery(s1), undefined, 'nothing assigned when shipping is refused');
+  Commands.advanceOrder(s1.id, 'Ready');
+  const sd = Commands.shipOrder(s1.id, 'driver', 'DRV-1', { then: 'out' });
+  assert.equal(sd.status, 'Out for Delivery'); assert.equal(Repo.get('orders', s1.id).status, 'Shipped'); assert.equal(sd.custody, 'driver:DRV-1');
+  const s2 = mk(); Commands.confirmOrder(s2.id); Commands.advanceOrder(s2.id, 'Ready');
+  const cd = Commands.shipOrder(s2.id, 'courier', 'BOSTA', { tracking: '  BST-77  ', then: 'picked' });
+  assert.equal(cd.status, 'Picked Up'); assert.equal(cd.tracking, 'BST-77');
+  Commands.setTracking(cd.id, 'BST-78'); assert.equal(Repo.get('deliveries', cd.id).tracking, 'BST-78');
+  throws(() => Commands.setTracking(cd.id, 'BST-78'), /already/);
+  throws(() => Commands.setTracking(Repo.by('deliveries', 'orderId', o.id)[0].id, 'X'), /In-store/);
+
+  /* Attendance: one record per person per day, replaced when recorded again. */
+  const emp = Commands.saveEmployee({ name: 'Test Person', jobTitle: 'Packer', shiftStart: '09:00' });
+  const today = dateKey(Clock.now());
+  throws(() => Commands.saveEmployee({ name: 'Bad', shiftStart: '9am' }), /09:00/);
+  throws(() => Commands.recordAttendance({ employeeId: emp, date: '2999-01-01', status: 'Present' }), /today or earlier/);
+  throws(() => Commands.recordAttendance({ employeeId: emp, date: today, status: 'Present', checkIn: '17:00', checkOut: '09:00' }), /before check-in/);
+  const id = Commands.recordAttendance({ employeeId: emp, date: today, status: 'Late', checkIn: '09:40' });
+  assert.equal(lateMinutes(Repo.get('attendance', id)), 40);
+  Commands.recordAttendanceDay(today, [{ employeeId: emp, status: 'Absent', checkIn: '09:00' }]);
+  assert.equal(Repo.all('attendance').filter(a => a.employeeId === emp).length, 1);
+  assert.equal(Repo.get('attendance', id).status, 'Absent'); assert.equal(Repo.get('attendance', id).checkIn, '', 'no times on an absent day');
+  throws(() => Commands.recordAttendanceDay(today, [{ employeeId: emp, status: 'Present' }, { employeeId: emp, status: 'Absent' }]), /twice/);
+  Commands.saveEmployee({ ...Repo.get('employees', emp), active: false });
+  throws(() => Commands.recordAttendance({ employeeId: emp, date: dateKey(new Date(Date.now() - 864e5).toISOString()), status: 'Present' }), /inactive/);
+  Commands.removeAttendance(id); assert.equal(Repo.get('attendance', id), undefined);
+
+  /* Product figures add up to the ledger: revenue from items kept, after every discount. */
+  const fromProducts = Repo.all('skus').reduce((t, s) => t + productStats(s.id).revenue, 0);
+  const fees = Repo.all('orders').reduce((t, x) => t + calc(x).entries.filter(e => e.acct === 'revenue' && e.tag === 'fee').reduce((a, e) => a + e.amt, 0), 0);
+  assert.equal(round2(fromProducts + fees), totals().revenue);
+  const ps = productStats('TEE-IVR'); assert.ok(ps.kept > 0 && ps.channels.get('In-store').units >= 2);
 });

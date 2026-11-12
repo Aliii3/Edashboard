@@ -210,3 +210,21 @@ html[dir=rtl] input[type=email],html[dir=rtl] input[type=tel],html[dir=rtl] inpu
 @media(max-width:760px){.workspace-header .avatar{margin-left:auto}body{padding:0}.app{border:0;border-radius:0;min-height:100vh}.workspace-header{padding:12px 16px}nav{flex:1 0 100%;order:3;margin:0;border-radius:18px;justify-content:flex-start}main{padding:14px 16px 90px}.equal,.formgrid{grid-template-columns:minmax(0,1fr)}.k2{grid-template-columns:minmax(0,1fr)}.kpi .value{font-size:19px}.kpi{padding:12px}.metric-icon{display:none}.triad{grid-template-columns:1fr}.fsel select,.fsel input{max-width:none}.fsel{flex:1 1 44%}.dock-key{display:none}.toast{right:16px;left:16px;bottom:78px;max-width:none}.filterbar .fsel{flex:1 1 44%}h1{font-size:24px}.tabs{display:flex}}
 @media(max-width:420px){.k4{grid-template-columns:minmax(0,1fr)}}
 @media print{body{background:#fff;padding:0}.app{border:0;box-shadow:none;background:#fff;backdrop-filter:none}.card,.panel,.kpi,.queue,.triad>div,.driver-card{background:#fff!important;box-shadow:none!important;backdrop-filter:none!important}.workspace-header,.command-dock,.actions,.filters,.filterbar,.tabs,button,.footerhint{display:none!important}.card,.panel{break-inside:avoid}}
+/* Delivery-status chips above the orders table */
+.chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:12px 14px 2px}.chips-label{font-size:11px;color:var(--muted);margin-inline-end:4px}
+.chip{display:inline-flex;gap:7px;align-items:center;padding:5px 11px;font-size:11.5px;font-weight:500;background:#ffffff8c;border-color:#ffffffd9;border-radius:16px}.chip b{font-weight:700;font-variant-numeric:tabular-nums;color:var(--brand)}.chip:hover{border-color:var(--brand-line)}.chip.on{background:var(--brand);border-color:var(--brand);color:#fff}.chip.on b{color:#fff}
+/* Live totals: one labelled figure per piece */
+.draft-total{display:flex;flex-wrap:wrap;gap:6px 14px;justify-content:flex-end}.bd{display:inline-flex;gap:6px;align-items:baseline;font-weight:500;color:var(--ink2)}.bd b{font-weight:650;color:var(--ink);font-variant-numeric:tabular-nums}.bd.total b{font-size:15px}.bd.negative,.bd.negative b{color:var(--red)}.bd.positive,.bd.positive b{color:var(--green)}
+.stmt-sum{display:flex;flex-wrap:wrap;gap:6px 16px}
+/* Money waiting to be collected */
+.cash-hero{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:12px 14px;border-radius:14px;background:var(--brand);color:#fff}.cash-hero small{color:#dfe5ff;display:block}.cash-hero strong{font-size:24px;font-weight:700;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.owed small{display:block}.owed strong{display:block;font-size:22px;font-weight:700;letter-spacing:-.5px;margin:2px 0;font-variant-numeric:tabular-nums}
+.driver-card .dc-act{position:relative;z-index:2;margin-top:8px;display:flex;justify-content:flex-end}
+/* Attendance */
+.seg.att{flex-wrap:wrap}.seg.att button{padding:4px 9px}.seg.att button:disabled{opacity:.55;cursor:not-allowed}
+.seg.att button.on.st-present{background:#e3f6ee;color:#0b7a55}.seg.att button.on.st-late{background:#fff1df;color:#a35a00}.seg.att button.on.st-absent{background:#fde7ea;color:#c22a40}.seg.att button.on.st-leave{background:#efe9ff;color:#5b3bd1}.seg.att button.on.st-day-off{background:#eef0f6;color:var(--ink2)}
+.tinput{padding:4px 7px;font-size:12px;width:96px}
+table.sheet{font-size:11.5px}table.sheet th.ac{text-align:center;padding:6px 2px;min-width:26px}table.sheet th.ac span,table.sheet th.ac small{display:block;line-height:1.1}table.sheet td{padding:6px 8px}table.sheet td.ac{padding:2px;text-align:center}
+td.ac .acell,td.ac span{display:inline-block;min-width:24px;padding:3px 2px;border:0;border-radius:6px;background:transparent;font-size:11px;font-weight:650;box-shadow:none;color:inherit}
+.ac.st-present{background:#e3f6ee;color:#0b7a55}.ac.st-late{background:#fff1df;color:#a35a00}.ac.st-absent{background:#fde7ea;color:#c22a40}.ac.st-leave{background:#efe9ff;color:#5b3bd1}.ac.st-day-off{background:#eef0f6;color:var(--muted)}
+.att-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--ink2)}.att-legend b.ac{display:inline-block;min-width:22px;text-align:center;border-radius:5px;padding:1px 3px;margin-inline-end:4px;font-size:11px}

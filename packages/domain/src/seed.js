@@ -165,6 +165,24 @@ function buildSeedWorkspace() {
   };
   settle('BOSTA', 24, .7, 'BST-STM-4471', i => i === 2 ? -120 : 0);
   settle('MYLERZ', 20, .5, 'MYZ-STM-2093', i => i === 1 ? 80 : 0);
+  /* Counter sales in the store: paid in full, no carrier. */
+  const priceOf = ls => sum(ls, l => Repo.get('skus', l.sku).price * l.qty);
+  [[300, [{ sku: 'TEE-BLK', qty: 2 }], 'Cash', null], [150, [{ sku: 'TOT-NAT', qty: 1 }, { sku: 'TEE-IVR', qty: 1 }], 'Card', null], [30, [{ sku: 'LIN-SND', qty: 1 }], 'Cash', customers[2].id], [6, [{ sku: 'TEE-IVR', qty: 1 }], 'InstaPay', null]].forEach(([ago, lines, method, customerId], i) => {
+    Clock.fixed = addHours(now, -ago); Commands.storeSale({ customerId, lines, payments: [{ method, amount: priceOf(lines), ref: method === 'Cash' ? '' : `POS-${4100 + i}` }] });
+  });
+  /* Staff and two weeks of attendance. Fridays are the weekly day off; today is left for the demo. */
+  Clock.fixed = addHours(now, -24 * 15);
+  const staff = [['Mona Hamdy', 'Accountant', '09:00'], ['Sherine Adel', 'Operations lead', '09:00'], ['Hossam Lotfy', 'Warehouse keeper', '08:30'], ['Nadia Kamel', 'Packer', '08:30'], ['Tamer Saad', 'Store cashier', '11:00']].map(([name, jobTitle, shiftStart], i) => Commands.saveEmployee({ name, jobTitle, shiftStart, phone: `0100555000${i + 1}` }));
+  const hhmm = n => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+  for (let ago = 13; ago >= 1; ago--) {
+    Clock.fixed = addHours(now, -24 * ago); const day = dateKey(Clock.fixed), friday = new Date(day + 'T12:00:00Z').getUTCDay() === 5;
+    Commands.recordAttendanceDay(day, staff.map(id => {
+      if (friday) return { employeeId: id, status: 'Day off' };
+      const r = rng(), status = r < .06 ? 'Absent' : r < .1 ? 'Leave' : r < .24 ? 'Late' : 'Present', st = Repo.get('employees', id).shiftStart, start = Number(st.slice(0, 2)) * 60 + Number(st.slice(3));
+      const works = status === 'Present' || status === 'Late';
+      return { employeeId: id, status, checkIn: works ? hhmm(status === 'Late' ? start + 16 + Math.floor(rng() * 40) : start - Math.floor(rng() * 12)) : '', checkOut: works ? hhmm(start + 540 + Math.floor(rng() * 25)) : '', note: status === 'Leave' ? 'Annual leave' : '' };
+    }));
+  }
   /* Inventory: production, purchasing and a stock count that leaves some SKUs low. */
   Clock.fixed = addHours(now, -96); const m1 = Commands.createProduction({ sku: 'TEE-BLK', qty: 30, due: dateKey(addHours(now, -24)) }); Commands.startProduction(m1); Clock.fixed = addHours(now, -30); Commands.completeProduction(m1);
   Clock.fixed = addHours(now, -30); const m2 = Commands.createProduction({ sku: 'LIN-OLV', qty: 20, due: dateKey(addHours(now, 48)) }); Commands.startProduction(m2);

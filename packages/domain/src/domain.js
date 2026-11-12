@@ -19,7 +19,10 @@ const DELIVERY_FLOW = {
 const TERMINAL_DELIVERY = new Set(['Delivered', 'Returned to Warehouse', 'Cancelled Assignment', 'Handed Over']);
 const ACTIVE_CUSTODY = new Set(['Picked Up', 'Out for Delivery', 'Failed Attempt', 'Retry Scheduled', 'Partially Delivered', 'Return in Transit']);
 const PAYMENT_METHODS = ['Cash', 'InstaPay', 'Mobile wallet', 'Card', 'Bank transfer'];
-const CHANNELS = ['Instagram', 'WhatsApp', 'Facebook', 'Phone', 'Website', 'Walk-in', 'Exchange'];
+const CHANNELS = ['Instagram', 'WhatsApp', 'Facebook', 'Phone', 'Website', 'Walk-in', 'In-store', 'Exchange'];
+const ATTENDANCE_STATUSES = ['Present', 'Late', 'Absent', 'Leave', 'Day off'];
+/* The customer record used for counter sales when the buyer gives no phone number. */
+const WALK_IN = 'C-WALKIN';
 const ENTRY_METHODS = ['Manual', 'CSV', 'API (planned)'];
 const FAILURE_REASONS = ['Customer unreachable', 'Customer refused', 'Wrong address', 'Rescheduled by customer', 'No cash available', 'Other'];
 const RETURN_REASONS = ['Customer not available', 'Customer refused', 'Wrong or incomplete address', 'Customer cancelled', 'Damaged in transit', 'Other'];
@@ -62,7 +65,7 @@ const activeDelivery = o => Repo.by('deliveries', 'orderId', o.id).find(d => !TE
 const paymentsOf = o => Repo.by('payments', 'orderId', o.id);
 const casesOf = o => Repo.by('cases', 'orderId', o.id);
 const customerOf = o => Repo.get('customers', o.customerId);
-const carrierName = d => d.mode === 'driver' ? (Repo.get('drivers', d.carrierId)?.name || d.carrierId) : (Repo.get('couriers', d.carrierId)?.name || d.carrierId);
+const carrierName = d => d.mode === 'store' ? 'In-store' : d.mode === 'driver' ? (Repo.get('drivers', d.carrierId)?.name || d.carrierId) : (Repo.get('couriers', d.carrierId)?.name || d.carrierId);
 
 /* ---------- Line and order value ---------- */
 function orderMerch(o) { return sum(linesOf(o), l => l.qty * l.price - l.discount) - o.discount; }
@@ -293,7 +296,8 @@ const Guards = {
     return null;
   },
   process(o) { return o.status === 'Confirmed' ? null : `Only Confirmed orders can start processing. This order is ${o.status}.`; },
-  ready(o) { return o.status === 'Processing' ? null : `Only Processing orders can be marked Ready. This order is ${o.status}.`; },
+  /* Processing is optional: a confirmed order can be marked Ready as soon as it is packed. */
+  ready(o) { return ['Confirmed', 'Processing'].includes(o.status) ? null : `Only Confirmed or Processing orders can be marked Ready. This order is ${o.status}.`; },
   cancel(o) {
     if (['Cancelled', 'Delivered', 'Returned', 'Partially Delivered', 'Partially Returned'].includes(o.status)) return `A ${o.status} order cannot be cancelled.`;
     if (['Shipped', 'Failed Delivery'].includes(o.status)) return 'The parcel has been dispatched. Bring it back through the return workflow instead of cancelling.';
@@ -301,6 +305,8 @@ const Guards = {
   },
   assign(o) {
     if (['New', 'Cancelled', 'Delivered', 'Returned', 'Partially Returned', 'Partially Delivered'].includes(o.status)) return o.status === 'New' ? 'Confirm the order first, so stock is reserved before assigning delivery.' : `A ${o.status} order cannot be assigned for delivery.`;
+    /* A carrier is only booked once the parcel is packed. */
+    if (['Confirmed', 'Processing'].includes(o.status)) return 'Mark the order Ready first. A driver or courier can only be assigned once the order is packed.';
     if (['Shipped', 'Failed Delivery'].includes(o.status)) return 'The parcel is already out. Use a driver-to-driver handover or the delivery actions.';
     const a = activeDelivery(o); if (a) return `Already assigned to ${carrierName(a)} (${a.id}). Reassign it instead, so one order never has two active assignments.`;
     return null;
@@ -389,9 +395,34 @@ const Commands = {
   _newDelivery(o, mode, carrier, opts = {}) {
     const id = 'DL-' + Repo.nextId('DL', 3001), at = Clock.now(), key = carrierKey(mode, carrier.id);
     const items = linesOf(o).map(l => ({ lineId: l.id, sku: l.sku, qty: l.qty, delivered: 0 }));
-    const d = Repo.insert('deliveries', { id, orderId: o.id, mode, carrierId: carrier.id, carrierKey: key, status: opts.status || 'Assigned', custody: opts.custody || 'warehouse', area: o.area, assignedAt: at, updatedAt: at, pickedUpAt: opts.pickedUpAt || null, completedAt: null, returnedAt: null, retryAt: null, items, attempts: [], history: [{ at, status: opts.status || 'Assigned', by: activityBy(), note: opts.note || `Assigned to ${carrier.name}` }], tracking: opts.tracking || '', cost: mode === 'driver' ? (opts.cost ?? (Number(S().driverFee) || 0)) : (opts.cost ?? carrier.shipRate), returnCost: mode === 'driver' ? (Number(S().returnFeeDriver) || 0) : carrier.returnRate, codFee: 0, predecessorId: opts.predecessorId || null, successorId: null });
+    const d = Repo.insert('deliveries', { id, orderId: o.id, mode, carrierId: carrier.id, carrierKey: key, status: opts.status || 'Assigned', custody: opts.custody || 'warehouse', area: o.area, assignedAt: at, updatedAt: at, pickedUpAt: opts.pickedUpAt || null, completedAt: null, returnedAt: null, retryAt: null, items, attempts: [], history: [{ at, status: opts.status || 'Assigned', by: activityBy(), note: opts.note || `Assigned to ${carrier.name}` }], tracking: String(opts.tracking || '').trim().slice(0, 60), cost: mode === 'driver' ? (opts.cost ?? (Number(S().driverFee) || 0)) : (opts.cost ?? carrier.shipRate), returnCost: mode === 'driver' ? (Number(S().returnFeeDriver) || 0) : carrier.returnRate, codFee: 0, predecessorId: opts.predecessorId || null, successorId: null });
     log(opts.logText || `Delivery ${id} assigned to ${carrier.name}`, { orderId: o.id, deliveryId: id, driverId: mode === 'driver' ? carrier.id : undefined });
     return d;
+  },
+  /* Fewer clicks for a packed order: assign it, and optionally record the pickup and send it out,
+     as one all-or-nothing step. then: 'assigned' (waits for pickup) | 'picked' | 'out'. */
+  shipOrder(orderId, mode, carrierId, opts = {}) {
+    return Repo.tx(() => {
+      const then = opts.then || 'assigned';
+      if (!['assigned', 'picked', 'out'].includes(then)) fail('Choose what happens after assigning.');
+      const d = Commands.assign(orderId, mode, carrierId, { tracking: opts.tracking });
+      if (then !== 'assigned') Commands.pickup(d.id);
+      if (then === 'out') Commands.setDeliveryStatus(d.id, 'Out for Delivery', { note: 'Out for delivery' });
+      return Repo.get('deliveries', d.id);
+    });
+  },
+  /* The courier's airway bill number, often only known after the shipment is booked on their portal.
+     Courier statements are matched on it. */
+  setTracking(deliveryId, tracking) {
+    return Repo.tx(() => {
+      const d = Repo.get('deliveries', deliveryId); if (!d) fail('Unknown delivery.');
+      if (d.mode === 'store') fail('In-store sales have no tracking number.');
+      const t = String(tracking ?? '').trim();
+      if (t.length > 60) fail('A tracking number is at most 60 characters.');
+      if (t === (d.tracking || '')) fail('That is already the tracking number.');
+      Repo.update('deliveries', d, { tracking: t });
+      log(`${d.id}: tracking number ${t ? `set to ${t}` : 'removed'}`, { orderId: d.orderId, deliveryId: d.id });
+    });
   },
   /* Before pickup only: closes the old assignment, opens a new one. No cash moves. */
   reassign(deliveryId, mode, carrierId, reason) {
@@ -748,6 +779,39 @@ const Commands = {
       return groups.length;
     });
   },
+  /* A sale at the counter: the customer pays and leaves with the items, so the order is confirmed,
+     handed over and paid in one step, with no carrier. Every payment goes straight to the business
+     (cash into the till), and the sale must be paid in full. Returns work like any delivered order. */
+  storeSale({ customerId, customer, lines, discount, payments, note }) {
+    return Repo.tx(() => {
+      let cust;
+      const phone = String(customer?.phone || '').replace(/[\s-]/g, '');
+      if (customer && (String(customer.name || '').trim() || phone)) cust = (phone && Repo.by('customers', 'phone', phone)[0]) || Commands.saveCustomer({ name: customer.name, phone, area: customer.area || AREAS[0], address: String(customer.address || '').trim() || 'In-store', tags: [] });
+      else cust = customerId ? Repo.get('customers', customerId) : walkInCustomer();
+      if (!cust) fail('Choose a customer, or leave it empty for a walk-in sale.');
+      const pays = (Array.isArray(payments) ? payments : []).map(p => ({ method: p?.method, amount: round2(p?.amount), ref: String(p?.ref || '').trim() })).filter(p => p.amount);
+      if (!pays.length) fail('Enter how the customer paid.');
+      for (const p of pays) { if (!PAYMENT_METHODS.includes(p.method)) fail('Choose a payment method.'); if (!(p.amount > 0)) fail('Payment amounts must be greater than zero.'); }
+      const o = Commands.createOrder({ customerId: cust.id, lines, discount, deliveryFee: 0, channel: 'In-store', source: 'Manual', paymentMethod: pays.length > 1 ? 'Split' : pays[0].method, address: 'In-store', area: 'In-store', instructions: '', note });
+      Commands.confirmOrder(o.id);
+      const value = orderValue(o), paid = sum(pays, p => p.amount);
+      if (Math.abs(paid - value) >= 0.01) fail(`The payments add up to ${money(paid)}, but the sale total is ${money(value)}. A store sale is paid in full at the counter.`);
+      const at = Clock.now(), by = activityBy(), id = 'DL-' + Repo.nextId('DL', 3001), ls = linesOf(o);
+      for (const l of ls) {
+        postMovement({ item: l.sku, itemType: 'sku', qty: -l.qty, kind: 'Dispatch', key: `dispatch:${l.id}`, ref: `#${o.id} · In-store`, note: 'Sold at the counter' });
+        Repo.update('lines', l, { reserved: 0, dispatched: l.qty, delivered: l.qty });
+      }
+      Repo.insert('deliveries', { id, orderId: o.id, mode: 'store', carrierId: 'STORE', carrierKey: 'store:STORE', status: 'Delivered', custody: 'customer', area: o.area, assignedAt: at, updatedAt: at, pickedUpAt: at, completedAt: at, returnedAt: null, retryAt: null, items: ls.map(l => ({ lineId: l.id, sku: l.sku, qty: l.qty, delivered: l.qty })), attempts: [{ no: 1, at, outcome: 'Delivered', reason: '', note: 'Handed over at the counter', by }], history: [{ at, status: 'Delivered', by, note: 'Sold and handed over in the store' }], tracking: '', cost: 0, returnCost: 0, codFee: 0, predecessorId: null, successorId: null });
+      Repo.update('orders', o, { status: 'Delivered', shippedAt: at, deliveredAt: at });
+      pays.forEach((p, i) => {
+        const ref = p.ref || `STORE-${o.id}-${i + 1}`;
+        if (Repo.count('payments', 'ref', ref)) fail(`Reference ${ref} has already been used.`);
+        Repo.insert('payments', { id: 'PAY-' + Repo.nextId('PAY', 5001), orderId: o.id, deliveryId: id, kind: 'collection', method: p.method, amount: p.amount, holderKey: 'business', driverId: null, ref, at, by, fee: p.method === 'Card' ? round2(p.amount * 0.025) : 0, note: 'Paid at the counter', reason: '' });
+      });
+      log(`In-store sale: ${ls.reduce((n, l) => n + l.qty, 0)} unit(s), paid ${pays.map(p => `${money(p.amount)} by ${p.method}`).join(' + ')}`, { orderId: o.id, customerId: cust.id });
+      return o;
+    });
+  },
   setRoadmap(phase, accepted) {
     return Repo.tx(() => {
       const before = Repo.data.roadmap; Repo.data.roadmap = { ...before, [phase]: !!accepted };
@@ -854,6 +918,36 @@ const Commands = {
     });
   },
 
+  /* STAFF ATTENDANCE */
+  saveEmployee(f) {
+    return Repo.tx(() => {
+      const name = String(f.name || '').trim(), phone = String(f.phone || '').replace(/[\s-]/g, ''), shiftStart = String(f.shiftStart || '').trim();
+      if (!name) fail('Enter the employee name.');
+      if (phone && !/^01[0125]\d{8}$/.test(phone)) fail('Enter a valid Egyptian mobile number, or leave it empty.');
+      if (shiftStart && !HHMM.test(shiftStart)) fail('Shift start is a time like 09:00.');
+      const row = { name, phone, jobTitle: String(f.jobTitle || '').trim().slice(0, 60), shiftStart, active: f.active !== false, note: String(f.note || '').trim().slice(0, 300) };
+      if (f.id) { const e = Repo.get('employees', f.id); if (!e) fail('Unknown employee.'); Repo.update('employees', e, row); log(`Employee ${name} updated`, {}); return f.id; }
+      const id = 'EMP-' + Repo.nextId('EMP', 1); Repo.insert('employees', { id, ...row, at: Clock.now() }); log(`Employee ${name} added`, {}); return id;
+    });
+  },
+  /* One record per employee per day. Recording again for the same day replaces it. */
+  recordAttendance(f) {
+    return Repo.tx(() => { const a = setAttendance(f), e = Repo.get('employees', a.employeeId); log(`Attendance: ${e.name} ${a.status.toLowerCase()} on ${a.date}${a.checkIn ? ` · in ${a.checkIn}` : ''}${a.checkOut ? ` · out ${a.checkOut}` : ''}`, {}); return a.id; });
+  },
+  /* The daily sheet: several employees for one day, all or nothing. */
+  recordAttendanceDay(date, entries) {
+    return Repo.tx(() => {
+      if (!Array.isArray(entries) || !entries.length) fail('Mark at least one employee.');
+      const seen = new Set(), n = {};
+      for (const x of entries) { if (seen.has(x?.employeeId)) fail('An employee appears twice.'); seen.add(x?.employeeId); const a = setAttendance({ ...x, date }); n[a.status] = (n[a.status] || 0) + 1; }
+      log(`Attendance for ${date}: ${ATTENDANCE_STATUSES.filter(k => n[k]).map(k => `${n[k]} ${k.toLowerCase()}`).join(', ')}`, {});
+      return entries.length;
+    });
+  },
+  removeAttendance(id) {
+    return Repo.tx(() => { const a = Repo.get('attendance', id); if (!a) fail('That attendance record no longer exists.'); Repo.remove('attendance', a); log(`Attendance removed: ${Repo.get('employees', a.employeeId)?.name || a.employeeId} on ${a.date}`, {}); });
+  },
+
   /* CAMPAIGNS */
   saveCampaign(f) {
     return Repo.tx(() => {
@@ -949,6 +1043,46 @@ const Commands = {
   },
 };
 
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+function setAttendance({ employeeId, date, status, checkIn, checkOut, note }) {
+  const e = Repo.get('employees', employeeId); if (!e) fail('Unknown employee.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || isNaN(new Date(date + 'T12:00:00Z'))) fail('Choose a date.');
+  if (date > dateKey(Clock.now())) fail('Attendance can only be recorded for today or earlier.');
+  if (!ATTENDANCE_STATUSES.includes(status)) fail('Choose present, late, absent, leave or day off.');
+  const id = `ATT-${employeeId}-${date}`, cur = Repo.get('attendance', id);
+  if (e.active === false && !cur) fail(`${e.name} is inactive. Reactivate them to record new attendance.`);
+  const works = status === 'Present' || status === 'Late', cin = works ? String(checkIn || '').trim() : '', cout = works ? String(checkOut || '').trim() : '';
+  if ((cin && !HHMM.test(cin)) || (cout && !HHMM.test(cout))) fail('Enter times like 09:00.');
+  if (cin && cout && cout < cin) fail('Check-out cannot be before check-in.');
+  const row = { employeeId, date, status, checkIn: cin, checkOut: cout, note: String(note || '').trim().slice(0, 200), at: Clock.now(), by: activityBy() };
+  return cur ? Repo.update('attendance', cur, row) : Repo.insert('attendance', { id, ...row });
+}
+/* Minutes after the shift start, or 0. Shown on the attendance sheet; the status is whatever was recorded. */
+function lateMinutes(a) {
+  const e = Repo.get('employees', a.employeeId); if (!e?.shiftStart || !a.checkIn) return 0;
+  const mins = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  return Math.max(0, mins(a.checkIn) - mins(e.shiftStart));
+}
+function walkInCustomer() {
+  return Repo.get('customers', WALK_IN) || Repo.insert('customers', { id: WALK_IN, name: 'Walk-in customer', phone: '', area: 'In-store', address: 'In-store', altAddresses: [], deliveryNotes: '', preferredTime: 'Any time', tags: [], notes: [], at: Clock.now() });
+}
+/* Sales of one product, from its order lines. Revenue is what was delivered and kept, at the net
+   unit price (after line and order discounts), so it matches the ledger. */
+function productStats(sku) {
+  const out = { ordered: 0, delivered: 0, returned: 0, kept: 0, revenue: 0, cogs: 0, orders: [], first: '', last: '', channels: new Map(), customers: new Map(), areas: new Map() };
+  const add = (m, k, units, rev) => { const x = m.get(k) || { units: 0, revenue: 0 }; x.units += units; x.revenue += rev; m.set(k, x); };
+  for (const l of Repo.by('lines', 'sku', sku)) {
+    const o = l.orderId != null && orderOf(l.orderId); if (!o) continue;
+    out.orders.push(o);
+    if (o.status !== 'Cancelled') { out.ordered += l.qty; if (!out.first || o.at < out.first) out.first = o.at; if (o.at > out.last) out.last = o.at; }
+    const kept = l.delivered - l.returned, rev = kept * netUnit(l, o);
+    out.delivered += l.delivered; out.returned += l.returned; out.kept += kept; out.revenue += rev; out.cogs += kept * l.unitCost;
+    if (kept) { add(out.channels, o.channel, kept, rev); add(out.customers, o.customerId, kept, rev); add(out.areas, o.area, kept, rev); }
+  }
+  out.revenue = round2(out.revenue); out.cogs = round2(out.cogs);
+  return out;
+}
+
 function setSettings(patch) {
   const before = Repo.data.settings; Repo.data.settings = { ...before, ...patch };
   if (Repo.undo) Repo.undo.push(() => { Repo.data.settings = before; });
@@ -1026,4 +1160,4 @@ function integrity() {
   return out;
 }
 
-export { RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };
+export { ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };

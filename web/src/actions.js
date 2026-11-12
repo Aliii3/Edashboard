@@ -2,11 +2,12 @@ import { Commands, Session, request, loadSnapshot, pull } from './api.js';
 import { isAr, setLang } from './i18n.js';
 import { ROLES } from '@commerce-os/domain';
 import { Repo, Rule, esc, fail, round2, sum } from '@commerce-os/domain';
-import { RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
+import { ATTENDANCE_STATUSES, lateMinutes, RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
 import { badge, blankOrderFilters, btn, carrierA, custA, dayShift, fd, fdt, filteredOrders, grid, kpi, latestDelivery, m, note, orderA, orderSearchText, presetRange, rangeLabel, row, search, setPath, simpleTable, timeline, today, ui } from './ui-kit.js';
 import { custodyLabel, returnRate } from './views-core.js';
 import { deliveryActions } from './views-ops.js';
 import { render } from './main.js';
+import { PRINT_SIZES, printDocs } from './print.js';
 /* ==========================================================================
    LAYER 6 · ACTIONS AND FORMS: modals call await Commands. The action table is the
    single dispatch point for every button in the app.
@@ -39,7 +40,20 @@ const dateToIso = (k) => k ? (k === today() ? new Date().toISOString() : new Dat
 const download = (name, text, type) => { const a = document.createElement('a'), url = URL.createObjectURL(new Blob([text], { type })); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1500); };
 const csvCell = v => { let s = String(v ?? ''); if (/^[=+@\-]/.test(s) && typeof v !== 'number') s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
 const toCsv = rows => rows.map(r => r.map(csvCell).join(',')).join('\r\n');
-function parseCSV(text) { const rows = []; let row = [], cell = '', q = false; for (let i = 0; i < text.length; i++) { const c = text[i]; if (c === '"') { if (q && text[i + 1] === '"') { cell += '"'; i++; } else q = !q; } else if (c === ',' && !q) { row.push(cell); cell = ''; } else if ((c === '\n' || c === '\r') && !q) { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); if (row.some(x => x.trim())) rows.push(row); row = []; cell = ''; } else cell += c; } if (q) throw new Rule('The CSV has an unclosed quotation mark.'); row.push(cell); if (row.some(x => x.trim())) rows.push(row); return rows; }
+function parseCSV(text, delim = ',') { const rows = []; let row = [], cell = '', q = false; for (let i = 0; i < text.length; i++) { const c = text[i]; if (c === '"') { if (q && text[i + 1] === '"') { cell += '"'; i++; } else q = !q; } else if (c === delim && !q) { row.push(cell); cell = ''; } else if ((c === '\n' || c === '\r') && !q) { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); if (row.some(x => x.trim())) rows.push(row); row = []; cell = ''; } else cell += c; } if (q) throw new Rule('The CSV has an unclosed quotation mark.'); row.push(cell); if (row.some(x => x.trim())) rows.push(row); return rows; }
+/* A table pasted from Excel is tab-separated; exports from couriers use commas or semicolons. */
+function parseTable(text) { text = text.replace(/^\uFEFF/, ''); const first = text.split(/\r?\n/)[0] || ''; const delim = ['\t', ';', ','].map(d => [d, first.split(d).length]).sort((a, b) => b[1] - a[1])[0][0]; return parseCSV(text, delim); }
+const DIGITS_AR = '٠١٢٣٤٥٦٧٨٩';
+const latinDigits = v => String(v ?? '').replace(/[٠-٩]/g, d => DIGITS_AR.indexOf(d));
+const normRef = v => latinDigits(v).trim().toUpperCase().replace(/^#/, '').replace(/\s+/g, '');
+const toAmount = v => { const x = latinDigits(v).replace(/٫/g, '.').replace(/[^\d.-]/g, ''); return x === '' || x === '-' ? NaN : Number(x); };
+/* Label printer choice, kept on this device only. */
+const PKEY = 'cos_print';
+function printPref() { const d = { kind: 'label', size: '100x150', receipt: false }; try { return { ...d, ...JSON.parse(localStorage.getItem(PKEY) || '{}') }; } catch { return d; } }
+function savePrintPref(p) { try { localStorage.setItem(PKEY, JSON.stringify({ ...printPref(), ...p })); } catch { /* private window: this visit only */ } }
+const nowHHMM = () => new Intl.DateTimeFormat('en-GB', { timeZone: S().timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+const staffDate = () => ui.staff.date || today();
+let stmt = null, stmtCtx = null;
 const CSV_COLUMNS = ['external_ref', 'date', 'customer_phone', 'customer_name', 'area', 'address', 'sku', 'qty', 'unit_price', 'line_discount', 'order_discount', 'delivery_fee', 'channel', 'campaign', 'payment_method'];
 /* Validates a whole file without writing anything, row by row. */
 function prepareImport(text) {
@@ -77,9 +91,14 @@ const customerOptionsFor = q => { const s = q.trim().toLowerCase(), out = []; fo
 const lineSum = l => { const s = Repo.get('skus', l.sku); return (l.price ?? s?.price ?? 0) * (Number(l.qty) || 0) - (Number(l.discount) || 0); };
 function renderDraftLines() {
   const box = document.getElementById('draftLines'); if (!box) return;
-  box.innerHTML = orderDraft.map((l, i) => { const a = availableOf(l.sku), short = a < Number(l.qty); return `<div class="line-row"><label class="field grow">Product<select data-dl="sku" data-i="${i}">${Repo.all('skus').map(s => `<option value="${esc(s.id)}" ${s.id === l.sku ? 'selected' : ''}>${esc(s.id)} · ${esc(s.name)} · ${m(s.price)}</option>`).join('')}</select></label><label class="field qty">Qty<input type="number" min="1" max="500" step="1" data-dl="qty" data-i="${i}" value="${esc(l.qty)}"></label><label class="field qty">Line discount<input type="number" min="0" step="1" data-dl="discount" data-i="${i}" value="${esc(l.discount || 0)}"></label><div class="stockhint ${short ? 'negative' : ''}">${a} available${short ? '<br>Short: can be saved, not confirmed' : ''}</div>${orderDraft.length > 1 ? `<button type="button" class="close" aria-label="Remove line" data-dl-rm="${i}">×</button>` : ''}</div>`; }).join('');
+  box.innerHTML = orderDraft.map((l, i) => { const a = availableOf(l.sku), short = a < Number(l.qty); return `<div class="line-row"><label class="field grow">Product<select data-dl="sku" data-i="${i}">${Repo.all('skus').map(s => `<option value="${esc(s.id)}" ${s.id === l.sku ? 'selected' : ''}>${esc(s.id)} · ${esc(s.name)} · ${m(s.price)}</option>`).join('')}</select></label><label class="field qty">Qty<input type="number" min="1" max="500" step="1" data-dl="qty" data-i="${i}" value="${esc(l.qty)}"></label><label class="field qty">Discount on this item<input type="number" min="0" step="1" data-dl="discount" data-i="${i}" value="${esc(l.discount || 0)}"></label><div class="stockhint ${short ? 'negative' : ''}">${a} available${short ? '<br>Short: can be saved, not confirmed' : ''}</div>${orderDraft.length > 1 ? `<button type="button" class="close" aria-label="Remove line" data-dl-rm="${i}">×</button>` : ''}</div>`; }).join('');
   const f = document.getElementById('modalForm'), disc = Number(f?.elements.discount?.value) || 0, fee = Number(f?.elements.deliveryFee?.value) || 0;
-  const t = document.getElementById('draftTotal'); if (t) t.textContent = `Order total ${m(sum(orderDraft, lineSum) - disc + fee)}`;
+  const gross = sum(orderDraft, l => (Repo.get('skus', l.sku)?.price || 0) * (Number(l.qty) || 0)), ld = sum(orderDraft, l => Number(l.discount) || 0), total = round2(gross - ld - disc + fee);
+  const bd = (k, v, cls = '') => `<span class="bd ${cls}"><span>${k}</span> <b>${m(v)}</b></span>`;
+  const t = document.getElementById('draftTotal'); if (t) t.innerHTML = bd('Items', gross) + (ld ? bd('Item discounts', -ld) : '') + (disc ? bd('Order discount', -disc) : '') + (fee ? bd('Delivery fee', fee) : '') + bd('Total', total, 'total');
+  /* Counter sale: the change to give back from the cash handed over. */
+  const ch = document.getElementById('changeDue');
+  if (ch) { const cash = Number(f.elements.cash?.value) || 0, other = f.elements.method2?.value ? Number(f.elements.amount2?.value) || 0 : 0, due = round2(total - other); ch.innerHTML = f.elements.method.value === 'Cash' && cash > 0 ? (cash >= due ? bd('Change to give back', cash - due, 'positive') : bd('Still to pay in cash', due - cash, 'negative')) : ''; }
 }
 function allocInputsTotal() { return [...document.querySelectorAll('#modalForm [data-alloc]')].reduce((s, el) => s + (Number(el.value) || 0), 0); }
 
@@ -94,6 +113,14 @@ const A = {
   goOrders(f) { ui.orders = { ...blankOrderFilters(), ...f }; if (ui.tbl.orders) ui.tbl.orders.p = 0; location.hash = '#/orders'; render(); },
   goFinance([tab, extra]) { ui.fin.tab = tab; Object.assign(ui.fin, extra || {}); location.hash = '#/finance'; render(); },
   goInv() { location.hash = '#/inventory'; },
+  goInvJournal(sku) { ui.inv.tab = 'Movement journal'; ui.inv.q = sku || ''; location.hash = '#/inventory'; render(); },
+  staffDay(n) { const d = n ? dayShift(staffDate(), n) : today(); if (d > today()) return; ui.staff.date = d; render(); },
+  staffMonth(n) { const cur = ui.staff.month || today().slice(0, 7), d = new Date(cur + '-15T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() + n); const next = d.toISOString().slice(0, 7); if (next > today().slice(0, 7)) return; ui.staff.month = next; render(); },
+  exportAttendance(mo) {
+    const rows = [['employee_id', 'employee', 'job_title', 'date', 'status', 'check_in', 'check_out', 'late_minutes', 'note', 'recorded_by']];
+    for (const e of Repo.all('employees')) for (const a of Repo.by('attendance', 'employeeId', e.id).filter(x => x.date.startsWith(mo)).sort((x, y) => x.date.localeCompare(y.date))) rows.push([e.id, e.name, e.jobTitle || '', a.date, a.status, a.checkIn || '', a.checkOut || '', lateMinutes(a), a.note || '', a.by || '']);
+    download(`attendance-${mo}.csv`, toCsv(rows), 'text/csv'); toast(`${rows.length - 1} attendance records exported.`);
+  },
   goShip(tab) { ui.ship.tab = tab; location.hash = '#/shipping'; render(); },
   clearOrders() { ui.orders = blankOrderFilters(); render(); },
   clearOv() { Object.assign(ui.ov, { campaign: '', sku: '', courier: '', driver: '' }); render(); },
@@ -108,7 +135,8 @@ const A = {
     modal('New order', `${note('Stock is checked now and reserved when you confirm. Entry method is recorded as Manual. Sales channel is separate.')}<div class="formgrid"><label class="field full">Customer (search by name or phone)<input name="customerPick" list="custList" autocomplete="off" value="${c ? esc(`${c.id} · ${c.name} · ${c.phone}`) : ''}" placeholder="Start typing…"></label><datalist id="custList">${customerOptionsFor('')}</datalist></div>
       <details class="whynot" ${c ? '' : ''}><summary>Or add a new customer</summary><div class="formgrid mt">${field('Name', 'nName')}${field('Mobile', 'nPhone', 'tel', '', 'placeholder="01012345678"')}${selectF('Area', 'nArea', AREAS)}${field('Address', 'nAddress')}</div></details>
       <h3 class="mt">Line items</h3><div id="draftLines"></div><button type="button" data-dl-add="1" class="small">+ Add line</button>
-      <div class="formgrid mt">${selectF('Sales channel', 'channel', CHANNELS.filter(x => x !== 'Exchange'), 'Phone')}${selectF('Campaign', 'campaignId', [['', 'Unattributed'], ...Repo.all('campaigns').map(x => [x.id, x.name])])}${selectF('Payment', 'paymentMethod', ['COD', 'InstaPay', 'Card', 'Mobile wallet', 'Bank transfer'], 'COD')}${field('Order date', 'date', 'date', today(), `required max="${today()}"`)}${field('Order discount', 'discount', 'number', 0, 'min="0" step="1" data-dl-total="1"')}${field('Delivery fee charged', 'deliveryFee', 'number', 0, 'min="0" step="1" data-dl-total="1"')}${textF('Internal note (optional)', 'note', '', 'maxlength="500"')}</div><p class="draft-total" id="draftTotal"></p>`, async f => {
+      <div class="note mt"><strong>Which discount?</strong> <strong>Discount on this item</strong> lowers the price of one product only, for example 50 off the shirt. <strong>Discount on the whole order</strong> comes off the total, like a coupon or rounding down. You rarely need both.</div>
+      <div class="formgrid mt">${selectF('Sales channel', 'channel', CHANNELS.filter(x => x !== 'Exchange' && x !== 'In-store'), 'Phone')}${selectF('Campaign', 'campaignId', [['', 'Unattributed'], ...Repo.all('campaigns').map(x => [x.id, x.name])])}${selectF('Payment', 'paymentMethod', ['COD', 'InstaPay', 'Card', 'Mobile wallet', 'Bank transfer'], 'COD')}${field('Order date', 'date', 'date', today(), `required max="${today()}"`)}${field('Discount on the whole order', 'discount', 'number', 0, 'min="0" step="1" data-dl-total="1"')}${field('Delivery fee charged', 'deliveryFee', 'number', 0, 'min="0" step="1" data-dl-total="1"')}${textF('Internal note (optional)', 'note', '', 'maxlength="500"')}</div><p class="draft-total" id="draftTotal"></p>`, async f => {
       if (!f.customerPick.trim() && !f.nName.trim()) fail('Choose an existing customer or add a new one.');
       const customer = f.nName.trim() ? { name: f.nName, phone: f.nPhone, area: f.nArea, address: f.nAddress, tags: [] } : null;
       const customerId = customer ? null : f.customerPick.split(' · ')[0];
@@ -123,21 +151,72 @@ const A = {
   cancelModal(id) { modal(`Cancel order #${id}`, `<p class="subtitle mb">Reservations are released and any active assignment closes. Prepaid money moves to refund review.</p>${textF('Reason', 'reason', '', 'required maxlength="200"')}`, async f => { await Commands.cancelOrder(id, f.reason); toast(`Order #${id} cancelled.`); }, 'Cancel order', { danger: true }); },
   orderNoteModal(id) { modal('Add internal note', textF('Note', 'note', '', 'required maxlength="1000"'), async f => { await Commands.addOrderNote(id, f.note); toast('Note saved.'); }); },
   attributeModal(id) { const o = orderOf(id); modal(`Attribution for #${id}`, `<div class="formgrid">${selectF('Campaign', 'campaignId', [['', 'Unattributed'], ...Repo.all('campaigns').map(x => [x.id, x.name])], o.campaignId || '')}${field('Reason (optional)', 'reason')}</div><p class="inlinehelp">Allocation recalculates for every order on both the old and new campaigns.</p>`, async f => { await Commands.attribute(id, f.campaignId || null, f.reason); toast('Attribution corrected. Campaign figures updated.'); }); },
+  setOrderDelivery(v) { ui.orders.delivery = v || ''; if (ui.tbl.orders) ui.tbl.orders.p = 0; render(); },
   async bulkConfirm() { const r = []; for (const id of ui.selected) { try { await Commands.confirmOrder(id); r.push(null); } catch (e) { r.push(`#${id}: ${e.message}`); } } bulkReport('confirmed', r); },
   async bulkAdvance() { const r = []; for (const id of ui.selected) { const o = orderOf(id); try { const to = o.status === 'New' ? null : o.status === 'Confirmed' ? 'Processing' : o.status === 'Processing' ? 'Ready' : null; if (o.status === 'New') await Commands.confirmOrder(id); else if (to) await Commands.advanceOrder(id, to); else fail(`${o.status} orders move through the delivery workflow.`); r.push(null); } catch (e) { r.push(`#${id}: ${e.message}`); } } bulkReport('advanced', r); },
-  bulkAssign() { A.assignModal([...ui.selected]); },
-  assignModal(ids) {
-    const def = S().defaultFulfillment; const ready = ids.length;
-    modal(`Assign ${ready} order${ready > 1 ? 's' : ''}`, `${note('Pick the fulfillment option. Invalid orders are skipped and explained. One order can only have one active assignment.')}<div class="formgrid">${selectF('Fulfillment', 'mode', [['driver', 'Private delivery'], ['courier', 'External courier']], def, 'data-assign-mode="1"')}<label class="field" data-show="driver">Driver<select name="driver">${Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty').map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.availability)} · ${driverStats(d.id).custody} in custody</option>`).join('')}</select></label><label class="field" data-show="courier">Courier<select name="courier">${Repo.all('couriers').filter(c => c.active !== false).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label class="field" data-show="courier">Tracking no. (optional)<input name="tracking" maxlength="40"></label></div>`, async f => {
-      const r = []; for (const id of ids) { try { await Commands.assign(id, f.mode, f.mode === 'driver' ? f.driver : f.courier, { tracking: f.tracking }); ui.selected.delete(id); r.push(null); } catch (e) { r.push(e.message); } }
-      if (r.some(x => !x) || r.length > 1) { closeModal(); bulkReport('assigned', r); return false; }
-      fail(r[0]);
-    }, 'Assign');
+  async bulkReady() { const r = []; for (const id of ui.selected) { try { await Commands.advanceOrder(id, 'Ready'); r.push(null); } catch (e) { r.push(`#${id}: ${e.message}`); } } bulkReport('marked ready', r, true); },
+  async bulkPickup() { const r = []; for (const id of [...ui.selected]) { const a = orderOf(id) && activeDelivery(orderOf(id)); try { if (a?.status !== 'Assigned') fail('No delivery is waiting for pickup.'); await Commands.pickup(a.id); r.push(null); } catch (e) { r.push(`#${id}: ${e.message}`); } } bulkReport('picked up', r); },
+  bulkShip() { A.shipModal([...ui.selected]); },
+  bulkAssign() { A.shipModal([...ui.selected]); },
+  bulkPrint(kind) { A.printModal([...ui.selected], kind); },
+  assignModal(ids) { A.shipModal(ids); },
+  /* Assign a packed order and, in the same step, record the pickup and send it out. */
+  shipModal(ids) {
+    ids = (Array.isArray(ids) ? ids : [ids]).map(Number); const many = ids.length > 1;
+    if (!ids.length) return toast('Select one or more orders first.', 'bad');
+    const choice = (v, t, sub, on) => `<label class="choice"><input type="radio" name="then" value="${v}" ${on ? 'checked' : ''}><span><strong>${t}</strong><small>${sub}</small></span></label>`;
+    modal(many ? `Ship ${ids.length} orders` : `Ship order #${ids[0]}`, `${note('Only Ready orders can be shipped: packed, with stock reserved. Any other order is skipped and explained.')}<div class="formgrid">${selectF('Fulfillment', 'mode', [['driver', 'Private delivery'], ['courier', 'External courier']], S().defaultFulfillment, 'data-assign-mode="1"')}<label class="field" data-show="driver">Driver<select name="driver">${Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty').map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.availability)} · ${driverStats(d.id).custody} in custody</option>`).join('')}</select></label><label class="field" data-show="courier">Courier<select name="courier">${Repo.all('couriers').filter(c => c.active !== false).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>${many ? '' : '<label class="field" data-show="courier">Tracking no. (optional)<input name="tracking" maxlength="60"></label>'}</div>
+      <h3 class="mt">What happens now?</h3><div class="choices">${choice('assigned', 'Wait for pickup', 'The carrier collects the parcel later. Record the pickup when they do.')}${choice('picked', 'Picked up now', 'The carrier is taking the parcel now. Stock is deducted.', true)}${choice('out', 'Picked up and out for delivery', 'The driver leaves with it right away.')}</div>
+      <label class="checkrow mt"><input type="checkbox" name="print"> Print shipping labels afterwards</label>`, async f => {
+      const r = [], done = [];
+      for (const id of ids) { try { await Commands.shipOrder(id, f.mode, f.mode === 'driver' ? f.driver : f.courier, { tracking: f.tracking, then: f.then }); ui.selected.delete(id); done.push(id); r.push(null); } catch (e) { r.push(many && !e.message.startsWith('#') ? `#${id}: ${e.message}` : e.message); } }
+      if (!many && r[0]) fail(r[0]);
+      if (f.print && done.length) printDocs(done, 'label', printPref().size);
+      closeModal(); bulkReport('shipped', r); return false;
+    }, many ? 'Ship orders' : 'Ship');
     syncAssign();
   },
+  printModal(ids, kind) {
+    ids = (Array.isArray(ids) ? ids : [ids]).map(Number).filter(id => orderOf(id));
+    if (!ids.length) return toast('Select one or more orders first.', 'bad');
+    const pref = printPref();
+    modal(`Print · ${ids.length} order${ids.length > 1 ? 's' : ''}`, `<div class="formgrid">${selectF('Document', 'kind', [['label', 'Shipping label (airway bill)'], ['invoice', 'Invoice'], ['both', 'Label and invoice']], kind || pref.kind)}${selectF('Paper size', 'size', Object.entries(PRINT_SIZES).map(([k, v]) => [k, v.label]), pref.size)}</div><p class="inlinehelp">One page per document, sized for a thermal label printer. In the print dialog, choose the label printer, set the paper to the same size and the margins to none. Your choice is remembered on this device.</p>`, async f => {
+      savePrintPref({ kind: f.kind, size: f.size }); printDocs(ids, f.kind, f.size); toast('Sent to the print dialog.');
+    }, 'Print');
+  },
+  trackingModal(id) {
+    const d = Repo.get('deliveries', id);
+    modal(`Tracking no. · ${esc(id)}`, `${note('The airway bill number from the courier. Courier statements are matched on it, so enter it exactly as the courier shows it.')}<div class="formgrid">${field('Tracking no.', 'tracking', 'text', d.tracking || '', 'maxlength="60"')}</div>`, async f => { await Commands.setTracking(id, f.tracking); toast('Tracking number saved.'); }, 'Save');
+  },
+  /* A counter sale: confirmed, handed over and paid in one step. */
+  storeSaleModal() {
+    if (!Repo.all('skus').length) return toast('Add a SKU under Inventory first.', 'bad');
+    orderDraft = [{ sku: Repo.all('skus')[0].id, qty: 1, discount: 0 }];
+    modal('In-store sale', `${note('A customer buying at the counter. The sale is confirmed, handed over and paid in one step, with no driver or courier. Stock goes out at once.')}
+      <h3>Items</h3><div id="draftLines"></div><button type="button" data-dl-add="1" class="small">+ Add line</button>
+      <div class="formgrid mt">${field('Discount on the whole sale', 'discount', 'number', 0, 'min="0" step="1" data-dl-total="1"')}${selectF('Paid by', 'method', PAYMENT_METHODS, 'Cash')}<label class="field" id="cashWrap">Cash handed over (optional, works out the change)<input name="cash" type="number" min="0" step="1" data-dl-total="1"></label><label class="field" id="refWrap" hidden>Reference (optional)<input name="ref" maxlength="60"></label></div>
+      <p class="draft-total" id="draftTotal"></p><p class="draft-total" id="changeDue"></p>
+      <details class="whynot mt"><summary>Customer (optional)</summary><div class="formgrid mt"><label class="field full">Existing customer (search by name or phone)<input name="customerPick" list="custList" autocomplete="off" placeholder="Leave empty for a walk-in customer"></label><datalist id="custList">${customerOptionsFor('')}</datalist>${field('Or a new customer: name', 'nName')}${field('Mobile', 'nPhone', 'tel', '', 'placeholder="01012345678"')}</div></details>
+      <details class="whynot mt"><summary>Split the payment between two methods</summary><div class="formgrid mt">${selectF('Second method', 'method2', [['', 'None'], ...PAYMENT_METHODS])}${field('Amount paid by the second method', 'amount2', 'number', '', 'min="0" step="0.01" data-dl-total="1"')}${field('Reference (optional)', 'ref2', 'text', '', 'maxlength="60"')}</div></details>
+      <div class="formgrid mt">${textF('Note (optional)', 'note', '', 'maxlength="500"')}</div>
+      <label class="checkrow"><input type="checkbox" name="print" ${printPref().receipt ? 'checked' : ''}> Print the invoice as a receipt</label>`, async f => {
+      const lines = orderDraft.map(l => ({ sku: l.sku, qty: Number(l.qty), discount: Number(l.discount) || 0 }));
+      const total = round2(sum(orderDraft, lineSum) - (Number(f.discount) || 0)), a2 = f.method2 ? round2(Number(f.amount2) || 0) : 0;
+      if (f.method2 && !(a2 > 0 && a2 < total)) fail('Enter how much was paid by the second method. It must be less than the total.');
+      let customerId = null, customer = null;
+      if (f.nName.trim() || f.nPhone.trim()) customer = { name: f.nName, phone: f.nPhone };
+      else if (f.customerPick.trim()) { customerId = f.customerPick.split(' · ')[0]; if (!Repo.get('customers', customerId)) fail('Pick the customer from the list, or leave it empty for a walk-in customer.'); }
+      const payments = [{ method: f.method, amount: round2(total - a2), ref: f.method === 'Cash' ? '' : f.ref }, ...(a2 ? [{ method: f.method2, amount: a2, ref: f.method2 === 'Cash' ? '' : f.ref2 }] : [])];
+      const o = await Commands.storeSale({ customerId, customer, lines, discount: Number(f.discount) || 0, payments, note: f.note });
+      savePrintPref({ receipt: !!f.print }); if (f.print) printDocs([o.id], 'invoice', printPref().size);
+      toast(`Sale #${o.id} recorded and paid.`);
+    }, 'Complete sale', { wide: true });
+    modalLive = () => { const fm = document.getElementById('modalForm'); if (!fm) return; const cash = fm.elements.method.value === 'Cash'; document.getElementById('cashWrap').hidden = !cash; document.getElementById('refWrap').hidden = cash; renderDraftLines(); };
+    modalLive();
+  },
   assignPicker(driverId) {
-    const cand = Repo.all('orders').filter(o => ['Confirmed', 'Processing', 'Ready'].includes(o.status) && !activeDelivery(o));
-    if (!cand.length) return toast('No orders need a carrier right now. Confirm an order first.');
+    const cand = Repo.all('orders').filter(o => o.status === 'Ready' && !activeDelivery(o));
+    if (!cand.length) return toast('No packed orders need a carrier right now. Mark an order Ready first.');
     const dr = Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty');
     modal('Assign orders to a driver', `<div class="formgrid">${selectF('Driver', 'driver', dr.map(d => [d.id, d.name]), driverId || dr[0]?.id)}</div><div class="pick-list mt">${cand.slice(0, 200).map(o => `<label class="checkrow"><input type="checkbox" name="o${o.id}"> #${o.id} · ${esc(customerOf(o).name)} · ${esc(o.area)} · ${badge(o.status)} · ${m(Math.max(0, calc(o).value - calc(o).paid))}</label>`).join('')}</div>${cand.length > 200 ? `<p class="inlinehelp">Showing the first 200 of ${cand.length}. Use Orders filters for larger batches.</p>` : ''}`, async f => {
       const ids = Object.keys(f).filter(k => /^o\d+$/.test(k)).map(k => Number(k.slice(1))); if (!ids.length) fail('Select at least one order.');
@@ -228,14 +307,30 @@ const A = {
   },
 
   /* driver money */
+  /* Receiving cash from a driver: type the amount counted; it is matched to their oldest deliveries. */
   handoverModal(driverId) {
-    const dr = Repo.get('drivers', driverId), c = driverCash(driverId), rows = Repo.by('deliveries', 'carrierKey', carrierKey('driver', driverId)).map(d => ({ d, left: deliveryCash(d).unhanded })).filter(x => x.left > 0);
-    let room = c.outstanding; const def = rows.map(x => { const a = Math.max(0, Math.min(room, x.left)); room = round2(room - a); return a; });
-    modal(`Cash handover · ${esc(dr.name)}`, `${note(`Outstanding ${m(c.outstanding)}. A handover moves custody of cash. It creates no revenue or profit. Allocate it per delivery. The same cash can't be allocated twice.`)}<div class="formgrid">${field('Unique handover reference', 'ref', 'text', `HO-${driverId}-${today().replaceAll('-', '')}`, 'required maxlength="40"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Received by (employee)', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Driver declared amount (optional)', 'declared', 'number', '', 'min="0" step="0.01"')}</div><div class="tablewrap mt"><table><thead><tr><th>Delivery</th><th>Order</th><th class="number">Uncleared cash</th><th class="number">Allocate</th></tr></thead><tbody>${rows.map((x, i) => `<tr><td>${x.d.id}</td><td>#${x.d.orderId}</td><td class="number">${m(x.left)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" max="${x.left}" step="0.01" value="${def[i]}" data-alloc="${x.d.id}" aria-label="Allocation for ${x.d.id}"></td></tr>`).join('')}</tbody></table></div><p class="draft-total" id="allocTotal"></p><p class="inlinehelp">If the driver declares more than was counted, an open discrepancy is raised for review.</p>`, async f => {
+    const dr = Repo.get('drivers', driverId), c = driverCash(driverId);
+    const rows = Repo.by('deliveries', 'carrierKey', carrierKey('driver', driverId)).map(d => ({ d, left: deliveryCash(d).unhanded })).filter(x => x.left > 0).sort((a, b) => (a.d.completedAt || a.d.assignedAt).localeCompare(b.d.completedAt || b.d.assignedAt));
+    if (!rows.length || c.outstanding <= 0) return toast(`${dr.name} holds no cash to receive.`);
+    const split = amt => { let room = round2(Math.min(Math.max(0, amt), c.outstanding)); return rows.map(x => { const a = round2(Math.min(room, x.left)); room = round2(room - a); return a; }); };
+    const def = split(c.outstanding), n = Repo.count('handovers', 'driverId', driverId) + 1;
+    modal(`Receive cash · ${esc(dr.name)}`, `<div class="cash-hero"><span><small>Holding now</small><strong>${m(c.outstanding)}</strong></span><small>From ${rows.length} deliveries, after approved expenses and refunds</small></div>
+      <div class="formgrid mt">${field('Amount you counted and received', 'amount', 'number', c.outstanding, `min="0.01" max="${c.outstanding}" step="0.01" required data-amount="1"`)}${field('Received by', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Receipt reference', 'ref', 'text', `HO-${driverId}-${today().replaceAll('-', '')}-${n}`, 'required maxlength="40"')}</div>
+      <p class="draft-total" id="allocTotal"></p>
+      <details class="whynot mt"><summary>Which deliveries this cash is for</summary><p class="inlinehelp">Filled in for you, oldest delivery first. Change it only if the driver says the cash is for different deliveries.</p><div class="tablewrap mt"><table><thead><tr><th>Delivery</th><th>Order</th><th class="number">Cash not handed over</th><th class="number">From this cash</th></tr></thead><tbody>${rows.map((x, i) => `<tr><td>${x.d.id}</td><td>#${x.d.orderId}</td><td class="number">${m(x.left)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" max="${x.left}" step="0.01" value="${def[i]}" data-alloc="${x.d.id}" aria-label="Allocation for ${x.d.id}"></td></tr>`).join('')}</tbody></table></div><div class="formgrid mt">${field('Amount the driver says they handed (optional)', 'declared', 'number', '', 'min="0" step="0.01"')}</div><p class="inlinehelp">If the driver declares more than you counted, a discrepancy is opened for review.</p></details>`, async f => {
       const allocations = [...document.querySelectorAll('#modalForm [data-alloc]')].map(el => ({ deliveryId: el.dataset.alloc, amount: Number(el.value) || 0 }));
-      await Commands.recordHandover({ driverId, ref: f.ref, at: dateToIso(f.date), receivedBy: f.receivedBy, allocations, declared: Number(f.declared) || null }); toast(`Handover ${f.ref} recorded.`);
-    }, 'Record handover', { wide: true });
-    modalLive = () => { const t = allocInputsTotal(); document.getElementById('allocTotal').textContent = `Handover total ${m(t)} · remaining with driver ${m(c.outstanding - t)}`; }; modalLive();
+      const t = round2(sum(allocations, a => a.amount)), amt = round2(Number(f.amount) || 0);
+      if (Math.abs(t - amt) > 0.009) fail(`The deliveries add up to ${m(t)}, but you entered ${m(amt)}. Make them match under "Which deliveries this cash is for".`);
+      await Commands.recordHandover({ driverId, ref: f.ref, at: dateToIso(f.date), receivedBy: f.receivedBy, allocations, declared: Number(f.declared) || null }); toast(`Cash received from ${dr.name}: ${m(amt)}.`);
+    }, 'Receive cash', { wide: true });
+    modalLive = ev => {
+      const fm = document.getElementById('modalForm'); if (!fm) return;
+      const amt = Number(fm.elements.amount.value) || 0;
+      if (!ev || ev.target?.name === 'amount') { const parts = split(amt); fm.querySelectorAll('[data-alloc]').forEach((el, i) => { el.value = parts[i]; }); }
+      const t = allocInputsTotal();
+      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Left with the driver after this</span> <b>${m(c.outstanding - amt)}</b></span>${Math.abs(t - amt) > 0.009 ? `<span class="bd negative"><span>Deliveries add up to</span> <b>${m(t)}</b></span>` : ''}`;
+    };
+    modalLive();
   },
   expenseDriverModal(driverId) {
     modal('Driver expense', `${note('An expense counts once in profit, when approved. Marking it as paid from collected cash only reduces what the driver owes back. Delivery fee payouts are already in delivery costs, so they only change cash custody.')}<div class="formgrid">${selectF('Category', 'category', DRIVER_EXPENSE_CATS)}${field('Amount', 'amount', 'number', '', 'min="0.01" step="0.01" required')}<label class="checkrow"><input type="checkbox" name="paidFromCash"> Driver paid this from collected cash</label>${field('Note', 'note', 'text', '', 'maxlength="200"')}</div>`, async f => { const id = await Commands.addDriverExpense({ driverId, category: f.category, amount: Number(f.amount), paidFromCash: !!f.paidFromCash, note: f.note }); toast(`${id} submitted for approval.`); }, 'Submit');
@@ -244,14 +339,36 @@ const A = {
   resolveModal(id) { modal(`Resolve ${id}`, textF('How was this resolved?', 'res', '', 'required maxlength="200"'), async f => { await Commands.resolveDiscrepancy(id, f.res); toast('Discrepancy resolved.'); }, 'Resolve'); },
   driverModal(id) { const d = id ? Repo.get('drivers', id) : { name: '', phone: '', vehicle: 'Motorcycle', zones: '', availability: 'Available', active: true }; modal(id ? `Edit ${esc(d.name)}` : 'New driver', `<div class="formgrid">${field('Name', 'name', 'text', d.name, 'required maxlength="60"')}${field('Mobile', 'phone', 'tel', d.phone, 'required')}${selectF('Vehicle', 'vehicle', ['Motorcycle', 'Van', 'Car', 'Bicycle'], d.vehicle)}${field('Zones', 'zones', 'text', d.zones, 'maxlength="100"')}${selectF('Availability', 'availability', ['Available', 'Busy', 'Off duty'], d.availability)}${selectF('Record state', 'state', [['active', 'Active'], ['inactive', 'Inactive, history preserved']], d.active === false ? 'inactive' : 'active')}</div>`, async f => { const rid = await Commands.saveDriver({ id, ...f, active: f.state === 'active' }); toast('Driver saved.'); if (!id) location.hash = `#/drivers/${rid}`; }); },
   courierModal(id) { const c = id ? Repo.get('couriers', id) : { name: '', shipRate: 60, returnRate: 40, codFee: 15, active: true }; modal(id ? `Edit ${esc(c.name)}` : 'New courier', `<div class="formgrid">${field('Name', 'name', 'text', c.name, 'required maxlength="60"')}${field('Ship rate', 'shipRate', 'number', c.shipRate, 'min="0" required')}${field('Return rate', 'returnRate', 'number', c.returnRate, 'min="0" required')}${field('COD fee', 'codFee', 'number', c.codFee, 'min="0" required')}${selectF('State', 'state', [['active', 'Active'], ['inactive', 'Inactive']], c.active === false ? 'inactive' : 'active')}</div><p class="inlinehelp">Rates apply to new assignments. Past deliveries keep their cost.</p>`, async f => { await Commands.saveCourier({ id, ...f, active: f.state === 'active' }); toast('Courier saved.'); }); },
+  /* A courier's payment: tick the deliveries it covers, or let their statement tick them. */
   settlementModal(courierId) {
-    const cr = Repo.get('couriers', courierId), rows = Repo.by('deliveries', 'carrierKey', carrierKey('courier', courierId)).filter(d => (d.completedAt || d.returnedAt)).map(d => ({ d, b: courierDeliveryBalance(d) })).filter(x => Math.abs(x.b.gap) > 0.001).slice(0, 300);
+    const cr = Repo.get('couriers', courierId);
+    const rows = Repo.by('deliveries', 'carrierKey', carrierKey('courier', courierId)).filter(d => d.completedAt || d.returnedAt).map(d => ({ d, b: courierDeliveryBalance(d) })).filter(x => Math.abs(x.b.gap) > 0.001).sort((a, b) => (a.d.completedAt || a.d.returnedAt).localeCompare(b.d.completedAt || b.d.returnedAt)).slice(0, 500);
     if (!rows.length) return toast(`Nothing outstanding from ${cr.name}.`);
-    modal(`Record settlement · ${esc(cr.name)}`, `${note('Enter what the courier actually remitted per delivery, net of their charges. Charges are already in the P&L and are not deducted again. A difference shows as Discrepancy or Overpaid.')}<div class="formgrid">${field('Settlement reference', 'ref', 'text', '', 'required maxlength="40"')}${field('Date received', 'date', 'date', today(), `required max="${today()}"`)}</div><div class="tablewrap mt"><table><thead><tr><th>Delivery</th><th>Order</th><th class="number">Customer</th><th class="number">Deductions</th><th class="number">Already received</th><th class="number">Net received now</th></tr></thead><tbody>${rows.map(({ d, b }) => `<tr><td>${d.id}</td><td>#${d.orderId}</td><td class="number">${m(b.customer)}</td><td class="number">${m(-b.deductions)}</td><td class="number">${m(b.actual)}</td><td class="number"><input class="qtyinput wide" type="number" step="0.01" value="${b.gap}" data-alloc="${d.id}" aria-label="Net received for ${d.id}"></td></tr>`).join('')}</tbody></table></div><p class="draft-total" id="allocTotal"></p>`, async f => {
-      const allocations = [...document.querySelectorAll('#modalForm [data-alloc]')].map(el => ({ deliveryId: el.dataset.alloc, net: Number(el.value) || 0 }));
-      await Commands.recordSettlement({ courierId, ref: f.ref, at: dateToIso(f.date), allocations }); toast(`Settlement ${f.ref} recorded.`);
-    }, 'Record settlement', { wide: true });
-    modalLive = () => { document.getElementById('allocTotal').textContent = `Settlement total ${m(allocInputsTotal())}`; }; modalLive();
+    stmt = null; stmtCtx = { courierId };
+    modal(`Payment from ${esc(cr.name)}`, `${note('Tick the deliveries this payment covers. Each one is filled in with what the courier should send you: the customer\'s cash less their shipping, return and COD charges. To tick them for you, open "Match the courier\'s statement" below.')}
+      <div class="formgrid">${field('Amount received', 'received', 'number', '', 'step="0.01" data-amount="1" placeholder="From the bank transfer or cash"')}${field('Payment reference', 'ref', 'text', '', 'required maxlength="40"')}${field('Date received', 'date', 'date', today(), `required max="${today()}"`)}</div>
+      <details class="whynot mt"><summary>Match the courier's statement</summary><p class="inlinehelp">Export the statement from the courier's portal as CSV, or copy the rows in Excel and paste them here with the header row. Rows are matched by tracking number, delivery ID or order number.</p>
+        <div class="formgrid mt"><label class="field">Statement file (.csv)<input type="file" id="stmtFile" accept=".csv,.tsv,.txt,text/csv"></label><label class="field">Or paste the rows<textarea name="stmtText" rows="3" data-mi="1" dir="auto"></textarea></label></div>
+        <div class="formgrid mt" id="stmtCols" hidden>${selectF('Column with the tracking or order number', 'refCol', [], '', 'data-stmt="1"')}${selectF('Column with the amount paid to you', 'amtCol', [], '', 'data-stmt="1"')}</div><div id="stmtResult" class="mt"></div></details>
+      <div class="tablewrap mt"><table><thead><tr><th><input type="checkbox" data-allinc="1" checked aria-label="Tick every delivery"></th><th>Delivery</th><th>Order</th><th>Tracking no.</th><th class="number">Customer paid</th><th class="number">Charges</th><th class="number">Already received</th><th class="number">Received now</th></tr></thead><tbody>${rows.map(({ d, b }) => `<tr><td><input type="checkbox" data-inc="${d.id}" checked aria-label="Include ${d.id}"></td><td>${d.id}<br><small>${esc(d.status)}</small></td><td>#${d.orderId}</td><td>${esc(d.tracking || '—')}</td><td class="number">${m(b.customer)}</td><td class="number">${m(-b.deductions)}</td><td class="number">${m(b.actual)}</td><td class="number"><input class="qtyinput wide" type="number" step="0.01" value="${b.gap}" data-alloc="${d.id}" data-exp="${b.gap}" aria-label="Net received for ${d.id}"></td></tr>`).join('')}</tbody></table></div>
+      <p class="draft-total" id="allocTotal"></p>`, async f => {
+      const allocations = ticked().map(el => ({ deliveryId: el.dataset.alloc, net: Number(el.value) || 0 })).filter(a => a.net);
+      if (!allocations.length) fail('Tick at least one delivery.');
+      const t = round2(sum(allocations, a => a.net));
+      if (f.received !== '' && Math.abs(t - Number(f.received)) > tol()) fail(`The ticked deliveries add up to ${m(t)}, but you received ${m(Number(f.received))}. Untick or correct deliveries until the difference is zero, or leave "Amount received" empty.`);
+      await Commands.recordSettlement({ courierId, ref: f.ref, at: dateToIso(f.date), allocations }); toast(`Payment ${f.ref} recorded: ${m(t)}.`);
+    }, 'Record payment', { wide: true });
+    modalLive = async ev => {
+      const t = ev?.target, fm = document.getElementById('modalForm'); if (!fm) return;
+      if (t?.dataset?.allinc) fm.querySelectorAll('[data-inc]').forEach(x => { x.checked = t.checked; });
+      if (t?.id === 'stmtFile' && t.files[0]) { if (t.files[0].size > 5e6) toast('The statement is larger than 5 MB.', 'bad'); else loadStatement(await t.files[0].text()); }
+      if (t?.name === 'stmtText') loadStatement(t.value);
+      if (t?.dataset?.stmt) matchStatement();
+      fm.querySelectorAll('[data-alloc]').forEach(el => { el.disabled = !fm.querySelector(`[data-inc="${el.dataset.alloc}"]`).checked; });
+      const inc = ticked(), tot = round2(sum(inc, el => Number(el.value) || 0)), rec = fm.elements.received.value, diff = rec === '' ? null : round2(Number(rec) - tot);
+      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Deliveries ticked</span> <b>${inc.length}</b></span><span class="bd"><span>Their total</span> <b>${m(tot)}</b></span>${diff === null ? '' : `<span class="bd ${Math.abs(diff) > tol() ? 'negative' : 'positive'}"><span>Difference from the amount received</span> <b>${m(diff)}</b></span>`}`;
+    };
+    modalLive();
   },
 
   /* inventory */
@@ -269,6 +386,33 @@ const A = {
   /* CRM */
   customerModal(id) { const c = id ? Repo.get('customers', id) : { name: '', phone: '', area: AREAS[0], address: '', deliveryNotes: '', preferredTime: 'Any time', tags: [], altAddresses: [] }; modal(id ? `Edit ${esc(c.name)}` : 'New customer', `<div class="formgrid">${field('Name', 'name', 'text', c.name, 'required maxlength="60"')}${field('Mobile', 'phone', 'tel', c.phone, 'required placeholder="01012345678"')}${selectF('Area', 'area', AREAS, c.area)}${selectF('Preferred delivery time', 'preferredTime', ['Any time', 'Morning', 'Afternoon', 'Evening'], c.preferredTime)}<label class="field full">Address<input name="address" value="${esc(c.address)}" required maxlength="200"></label><label class="field full">Alternate address (optional)<input name="alt" value="${esc(c.altAddresses?.[0] || '')}" maxlength="200"></label>${textF('Delivery instructions', 'deliveryNotes', c.deliveryNotes, 'maxlength="300"')}</div>`, async f => { const r = await Commands.saveCustomer({ id, ...f, tags: c.tags, altAddresses: f.alt ? [f.alt] : [] }); toast('Customer saved.'); if (!id) location.hash = `#/customers/${r.id}`; }); },
   contactModal(id) { modal('Log a contact', `${note('This records a conversation that already happened. It does not send anything.')}<div class="formgrid">${selectF('Channel', 'channel', ['Phone', 'WhatsApp', 'Instagram', 'Email', 'In person'])}${selectF('Direction', 'direction', ['Outbound', 'Inbound'])}${textF('Summary', 'summary', '', 'required maxlength="500"')}${field('Follow up on (optional)', 'followUp', 'date')}</div>`, async f => { await Commands.logContact({ customerId: id, ...f }); toast('Contact logged. No message was sent.'); }, 'Log contact'); },
+  /* staff attendance */
+  employeeModal(id) {
+    const e = id ? Repo.get('employees', id) : { name: '', phone: '', jobTitle: '', shiftStart: '09:00', active: true, note: '' };
+    modal(id ? `Edit ${esc(e.name)}` : 'New employee', `<div class="formgrid">${field('Name', 'name', 'text', e.name, 'required maxlength="60"')}${field('Job title', 'jobTitle', 'text', e.jobTitle || '', 'maxlength="60"')}${field('Mobile (optional)', 'phone', 'tel', e.phone || '', 'placeholder="01012345678"')}${field('Shift starts at', 'shiftStart', 'time', e.shiftStart || '')}${selectF('State', 'state', [['active', 'Active'], ['inactive', 'Inactive, history kept']], e.active === false ? 'inactive' : 'active')}${textF('Note (optional)', 'note', e.note || '', 'maxlength="300"')}</div><p class="inlinehelp">The shift start shows how late someone checked in. The status is always the one you choose.</p>`, async f => { await Commands.saveEmployee({ id, ...f, active: f.state === 'active' }); toast('Employee saved.'); });
+  },
+  /* One tap per person. Present keeps the shift start unless they came earlier; Late takes the time now. */
+  attSet([employeeId, status]) {
+    const date = staffDate(), cur = Repo.get('attendance', `ATT-${employeeId}-${date}`), e = Repo.get('employees', employeeId), isToday = date === today(), now = nowHHMM();
+    const works = status === 'Present' || status === 'Late';
+    const checkIn = !works ? '' : cur?.checkIn || (status === 'Late' ? (isToday ? now : '') : (isToday && (!e.shiftStart || now < e.shiftStart) ? now : e.shiftStart || ''));
+    run(() => Commands.recordAttendance({ employeeId, date, status, checkIn, checkOut: works ? cur?.checkOut || '' : '', note: cur?.note || '' }));
+  },
+  attTime([employeeId, k, v]) {
+    const date = staffDate(), cur = Repo.get('attendance', `ATT-${employeeId}-${date}`);
+    run(() => Commands.recordAttendance({ employeeId, date, status: cur && cur.status !== 'Absent' && cur.status !== 'Leave' && cur.status !== 'Day off' ? cur.status : 'Present', checkIn: k === 'checkIn' ? v : cur?.checkIn || '', checkOut: k === 'checkOut' ? v : cur?.checkOut || '', note: cur?.note || '' }));
+  },
+  attNow([employeeId]) { A.attTime([employeeId, 'checkOut', nowHHMM()]); },
+  attAllPresent() {
+    const date = staffDate(), es = Repo.all('employees').filter(e => e.active !== false && !Repo.get('attendance', `ATT-${e.id}-${date}`));
+    if (!es.length) return toast('Everyone already has attendance for this day.');
+    run(() => Commands.recordAttendanceDay(date, es.map(e => ({ employeeId: e.id, status: 'Present', checkIn: e.shiftStart || '' }))), n => `${n} marked present.`);
+  },
+  attRemove(id) { run(() => Commands.removeAttendance(id), 'Attendance cleared.'); },
+  attendanceModal([employeeId, date]) {
+    const e = Repo.get('employees', employeeId), cur = Repo.get('attendance', `ATT-${employeeId}-${date}`) || {};
+    modal(`${esc(e.name)} · ${esc(date)}`, `<div class="formgrid">${selectF('Status', 'status', ATTENDANCE_STATUSES, cur.status || 'Present')}${field('Check in', 'checkIn', 'time', cur.checkIn || e.shiftStart || '')}${field('Check out', 'checkOut', 'time', cur.checkOut || '')}${textF('Note (optional)', 'note', cur.note || '', 'maxlength="200"')}</div><p class="inlinehelp">Times are kept only for Present and Late.</p>`, async f => { await Commands.recordAttendance({ employeeId, date, ...f }); toast('Attendance saved.'); });
+  },
   toggleTag([id, t]) { const c = Repo.get('customers', id), has = (c.tags || []).includes(t); run(() => Commands.setCustomerTags(id, has ? c.tags.filter(x => x !== t) : [...(c.tags || []), t])); },
 
   /* campaigns and finance */
@@ -320,14 +464,54 @@ const A = {
     });
   },
 };
-function bulkReport(verb, results) {
+function bulkReport(verb, results, keepSelection = false) {
   const ok = results.filter(x => !x).length, bad = results.filter(Boolean);
-  ui.selected.clear();
+  if (!keepSelection) ui.selected.clear();
   if (!bad.length) return toast(`${ok} order${ok === 1 ? '' : 's'} ${verb}.`), render();
   render();
   modal(`${ok} ${verb}, ${bad.length} skipped`, `<ul class="plain">${bad.slice(0, 30).map(x => `<li>${esc(x)}</li>`).join('')}</ul>${bad.length > 30 ? `<p class="inlinehelp">And ${bad.length - 30} more.</p>` : ''}`, null);
 }
 function syncAssign() { const f = document.getElementById('modalForm'); if (!f) return; const mode = f.elements.mode?.value; f.querySelectorAll('[data-show]').forEach(el => { el.hidden = el.dataset.show !== mode; }); }
+
+/* ---------- Courier statement matching ---------- */
+const ticked = () => [...document.querySelectorAll('#modalForm [data-alloc]')].filter(el => document.querySelector(`#modalForm [data-inc="${el.dataset.alloc}"]`)?.checked);
+function loadStatement(text) {
+  const fm = document.getElementById('modalForm'), box = document.getElementById('stmtResult'), cols = document.getElementById('stmtCols'); if (!fm) return;
+  try {
+    if (!text.trim()) { stmt = null; cols.hidden = true; box.innerHTML = ''; return; }
+    const rows = parseTable(text), head = (rows.shift() || []).map(h => h.trim());
+    if (!rows.length) throw new Rule('The statement needs a header row and at least one data row.');
+    stmt = { head, rows };
+    const find = re => head.findIndex(h => re.test(h));
+    let ri = find(/track|awb|airway|waybill|bill|barcode|shipment|بوليص|الشحن|تتبع/i); if (ri < 0) ri = find(/order|ref|reference|code|id\b|رقم|كود/i); if (ri < 0) ri = 0;
+    let ai = find(/net|صافي/i); if (ai < 0) ai = find(/cod|amount|collected|cash|value|total|paid|المبلغ|التحصيل|قيمة|إجمالي/i); if (ai < 0) ai = head.length - 1;
+    const opts = head.map((h, i) => `<option value="${i}">${esc(h || `Column ${i + 1}`)}</option>`).join('');
+    fm.elements.refCol.innerHTML = opts; fm.elements.amtCol.innerHTML = opts; fm.elements.refCol.value = String(ri); fm.elements.amtCol.value = String(ai); cols.hidden = false;
+    matchStatement();
+  } catch (e) { stmt = null; cols.hidden = true; box.innerHTML = `<p class="form-error">${esc(e instanceof Rule ? e.message : 'That statement could not be read.')}</p>`; }
+}
+function matchStatement() {
+  const fm = document.getElementById('modalForm'), box = document.getElementById('stmtResult'); if (!stmt || !fm || !stmtCtx) return;
+  const ri = Number(fm.elements.refCol.value), ai = Number(fm.elements.amtCol.value), keys = new Map();
+  for (const d of Repo.by('deliveries', 'carrierKey', carrierKey('courier', stmtCtx.courierId))) for (const k of [d.id, d.orderId, orderOf(d.orderId)?.externalRef, d.tracking]) if (k !== null && k !== undefined && k !== '') keys.set(normRef(k), d);
+  const got = new Map(), missing = [], settled = [], noAmount = [];
+  for (const r of stmt.rows) {
+    const raw = r[ri] ?? '', ref = normRef(raw); if (!ref) continue;
+    const amt = toAmount(r[ai]); if (!Number.isFinite(amt)) { noAmount.push(raw); continue; }
+    const d = keys.get(ref); if (!d) { missing.push(raw); continue; }
+    if (!fm.querySelector(`[data-inc="${d.id}"]`)) { settled.push(raw); continue; }
+    got.set(d.id, round2((got.get(d.id) || 0) + amt));
+  }
+  fm.querySelectorAll('[data-inc]').forEach(x => { x.checked = got.has(x.dataset.inc); }); fm.querySelector('[data-allinc]').checked = false;
+  fm.querySelectorAll('[data-alloc]').forEach(el => { el.value = got.has(el.dataset.alloc) ? got.get(el.dataset.alloc) : el.dataset.exp; });
+  const total = round2(sum([...got.values()], x => x)); if (got.size) fm.elements.received.value = total;
+  const odd = [...got].filter(([id, v]) => Math.abs(v - Number(fm.querySelector(`[data-alloc="${id}"]`).dataset.exp)) > tol());
+  const list = (title, xs, html) => xs.length ? `<p class="mt"><strong>${title}</strong> <span class="badge">${xs.length}</span></p><p class="small">${xs.slice(0, 25).map(x => html ? x : esc(x)).join(html ? '<br>' : ' · ')}${xs.length > 25 ? ' …' : ''}</p>` : '';
+  box.innerHTML = `<div class="stmt-sum"><span class="bd"><span>Rows in the statement</span> <b>${stmt.rows.length}</b></span><span class="bd positive"><span>Matched and ticked</span> <b>${got.size}</b></span><span class="bd"><span>Statement total</span> <b>${m(total)}</b></span></div>`
+    + list('Paid differently from what we expected', odd.map(([id, v]) => `${esc(id)}: <span>statement</span> <b>${m(v)}</b>, <span>expected</span> <b>${m(Number(fm.querySelector(`[data-alloc="${id}"]`).dataset.exp))}</b>`), true)
+    + list('Not found for this courier. Check the tracking numbers on these deliveries', missing)
+    + list('Already settled earlier', settled) + list('No amount in the amount column', noAmount);
+}
 
 /* ---------- Global search ---------- */
 function globalSearch(q) {
@@ -336,7 +520,8 @@ function globalSearch(q) {
   let n = 0; for (const o of Repo.all('orders')) { if (orderSearchText(o).includes(q)) { out.push({ href: `#/orders/${o.id}`, title: `Order #${o.id}`, sub: `${customerOf(o).name} · ${o.status}` }); if (++n >= cap) break; } }
   n = 0; for (const c of Repo.all('customers')) { if (`${c.name} ${c.phone} ${c.id}`.toLowerCase().includes(q)) { out.push({ href: `#/customers/${c.id}`, title: c.name, sub: `Customer · ${c.phone}` }); if (++n >= cap) break; } }
   for (const d of Repo.all('drivers')) if (`${d.name} ${d.phone}`.toLowerCase().includes(q)) out.push({ href: `#/drivers/${d.id}`, title: d.name, sub: `Driver · ${d.availability}` });
-  n = 0; for (const s of Repo.all('skus')) { if (`${s.id} ${s.name}`.toLowerCase().includes(q)) { out.push({ href: '#/inventory', title: s.id, sub: `${s.name} · ${availableOf(s.id)} available` }); if (++n >= cap) break; } }
+  n = 0; for (const s of Repo.all('skus')) { if (`${s.id} ${s.name}`.toLowerCase().includes(q)) { out.push({ href: Session.canSee('products') ? `#/products/${s.id}` : '#/inventory', title: s.id, sub: `${s.name} · ${availableOf(s.id)} available` }); if (++n >= cap) break; } }
+  if (Session.canSee('staff')) for (const e of Repo.all('employees')) if (`${e.name} ${e.phone} ${e.jobTitle}`.toLowerCase().includes(q)) out.push({ href: `#/staff/${e.id}`, title: e.name, sub: `Employee · ${e.jobTitle || ''}` });
   const del = Repo.get('deliveries', q.toUpperCase()); if (del) out.unshift({ href: `#/orders/${del.orderId}`, title: del.id, sub: `Delivery · ${del.status} · ${carrierName(del)}` });
   return out.slice(0, 10);
 }
@@ -353,4 +538,4 @@ async function handleCsv(file) {
   } catch (err) { el.innerHTML = `<p class="form-error">${esc(err instanceof Rule ? err.message : 'That file could not be read.')}</p>`; }
 }
 
-export { A, CSV_COLUMNS, allocInputsTotal, bulkReport, closeModal, csvCell, customerOptionsFor, dateToIso, download, field, globalSearch, handleCsv, lineSum, modal, modalLive, nowLocal, orderDraft, parseCSV, pendingImport, prepareImport, renderDraftLines, run, selectF, syncAssign, textF, toCsv, toast };
+export { normRef, parseTable, printPref, toAmount, A, CSV_COLUMNS, allocInputsTotal, bulkReport, closeModal, csvCell, customerOptionsFor, dateToIso, download, field, globalSearch, handleCsv, lineSum, modal, modalLive, nowLocal, orderDraft, parseCSV, pendingImport, prepareImport, renderDraftLines, run, selectF, syncAssign, textF, toCsv, toast };

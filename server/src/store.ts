@@ -11,7 +11,7 @@ export class Forbidden extends Error {}
 /* The domain layer keeps one in-memory working set, so requests inside one instance take turns. */
 let chain: Promise<unknown> = Promise.resolve();
 const serial = <T>(fn: () => Promise<T>): Promise<T> => { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p; };
-export const SETTINGS_KEYS = new Set(['company', 'currency', 'timezone', 'tolerance', 'overdueHours', 'defaultFulfillment', 'allocationPolicy', 'pageSize', 'driverFee', 'returnFeeDriver', 'sources']);
+export const SETTINGS_KEYS = new Set(['company', 'currency', 'timezone', 'tolerance', 'overdueHours', 'defaultFulfillment', 'allocationPolicy', 'pageSize', 'driverFee', 'returnFeeDriver', 'sources', 'companyPhone', 'returnAddress']);
 
 function authorize(user: User, name: string, args: any[]) {
   if (!canRun(user.role, name)) throw new Forbidden(`Your role (${user.role}) can't do this.`);

@@ -4,8 +4,9 @@
 import { TERMINAL } from './terminal.ts';
 import { selectRows, readWorkspace, idParam, loadAll, type Client } from './db.ts';
 
-export type Scope = { all?: boolean; orders: any[]; deliveries: any[]; drivers: any[]; cases: any[]; discrepancies: any[]; driverExpenses: any[]; customers: any[]; phones: any[]; campaignSpend: any[]; expenses: any[]; production: any[] };
-const scope = (o: Partial<Scope> = {}): Scope => ({ orders: [], deliveries: [], drivers: [], cases: [], discrepancies: [], driverExpenses: [], customers: [], phones: [], campaignSpend: [], expenses: [], production: [], ...o });
+export type Scope = { all?: boolean; orders: any[]; deliveries: any[]; drivers: any[]; cases: any[]; discrepancies: any[]; driverExpenses: any[]; customers: any[]; phones: any[]; campaignSpend: any[]; expenses: any[]; production: any[]; attendance: any[] };
+const scope = (o: Partial<Scope> = {}): Scope => ({ orders: [], deliveries: [], drivers: [], cases: [], discrepancies: [], driverExpenses: [], customers: [], phones: [], campaignSpend: [], expenses: [], production: [], attendance: [], ...o });
+const attId = (x: any, date?: unknown) => x && typeof x === 'object' ? `ATT-${x.employeeId}-${date ?? x.date}` : null;
 const phone = (p: unknown) => typeof p === 'string' ? p.replace(/[\s-]/g, '') : null;
 const first = (a: any[]) => a[0] && typeof a[0] === 'object' ? a[0] : {};
 
@@ -15,10 +16,11 @@ export function scopeFor(name: string, a: any[]): Scope {
     case 'createOrder': return scope({ customers: [first(a).customerId] });
     case 'createOrderWithCustomer': return scope({ customers: [a[0]?.order?.customerId], phones: [phone(a[0]?.customer?.phone)] });
     case 'importOrders': return scope({ phones: Array.isArray(a[0]) ? a[0].map((g: any) => phone(g?.phone)) : [] });
-    case 'addOrderNote': case 'confirmOrder': case 'advanceOrder': case 'cancelOrder': case 'attribute': case 'prepay': case 'assign': return scope({ orders: [a[0]] });
+    case 'addOrderNote': case 'confirmOrder': case 'advanceOrder': case 'cancelOrder': case 'attribute': case 'prepay': case 'assign': case 'shipOrder': return scope({ orders: [a[0]] });
+    case 'storeSale': return scope({ customers: [first(a).customerId, 'C-WALKIN'], phones: [phone(first(a).customer?.phone)] });
     case 'openCase': return scope({ orders: [first(a).orderId] });
     case 'refund': { const src = a[1]?.source; return scope({ orders: [a[0]], drivers: typeof src === 'string' && src.startsWith('driver:') ? [src.slice(7)] : [] }); }
-    case 'reassign': case 'driverHandover': case 'pickup': case 'setDeliveryStatus': case 'deliver': case 'collect': case 'startReturn': case 'receiveAtWarehouse': return scope({ deliveries: [a[0]] });
+    case 'reassign': case 'driverHandover': case 'setTracking': case 'pickup': case 'setDeliveryStatus': case 'deliver': case 'collect': case 'startReturn': case 'receiveAtWarehouse': return scope({ deliveries: [a[0]] });
     case 'recordHandover': case 'addDriverExpense': return scope({ drivers: [first(a).driverId] });
     case 'decideDriverExpense': return scope({ driverExpenses: [a[0]] });
     case 'resolveDiscrepancy': return scope({ discrepancies: [a[0]] });
@@ -33,6 +35,10 @@ export function scopeFor(name: string, a: any[]): Scope {
     case 'saveDriver': return scope({ drivers: first(a).id ? [first(a).id] : [] });
     case 'closePeriod': return scope({ all: true });   // closing figures need the whole ledger
     case 'reopenPeriod': return scope();
+    case 'recordAttendance': return scope({ attendance: [attId(first(a))] });
+    case 'recordAttendanceDay': return scope({ attendance: Array.isArray(a[1]) ? a[1].map((x: any) => attId(x, a[0])) : [] });
+    case 'removeAttendance': return scope({ attendance: [a[0]] });
+    case 'saveEmployee': return scope();
     case 'adjustStock': case 'createProduction': case 'receiveMaterial': case 'saveSku': case 'saveCampaign': case 'addExpense':
     case 'setAvailability': case 'saveCourier': case 'saveSettings': case 'setRoadmap': return scope();
     default: throw new Error(`No data scope defined for ${name}`);
@@ -48,7 +54,7 @@ export async function loadScope(c: Client, s: Scope) {
   const tables: Record<string, Map<any, any>> = {};
   const put = (t: string, rows: any[]) => { const m = tables[t] ??= new Map(); for (const r of rows) m.set(r.id, r); return rows; };
   const byIds = async (t: string, ids: any[]) => ids.length ? put(t, await selectRows(c, t, `id = ANY($1)`, [idParam(t, ids)])) : [];
-  for (const t of ['skus', 'boms', 'materials', 'couriers', 'drivers', 'campaigns']) put(t, await selectRows(c, t, 'true'));
+  for (const t of ['skus', 'boms', 'materials', 'couriers', 'drivers', 'campaigns', 'employees']) put(t, await selectRows(c, t, 'true'));
   const orderIds = new Set<number>(clean(s.orders).map(Number).filter(Number.isFinite)), driverIds = new Set<string>(clean(s.drivers).map(String));
   for (const d of await byIds('deliveries', clean(s.deliveries))) orderIds.add(d.orderId);
   for (const x of await byIds('cases', clean(s.cases))) orderIds.add(x.orderId);
@@ -78,6 +84,7 @@ export async function loadScope(c: Client, s: Scope) {
   const camp = clean(s.campaignSpend); if (camp.length) put('spend', await selectRows(c, 'spend', 'campaign_id = ANY($1)', [camp]));
   await byIds('expenses', clean(s.expenses));
   await byIds('production', clean(s.production));
+  await byIds('attendance', clean(s.attendance));
   /* Summary rows: total stock per item, and reservations held by orders not loaded above. */
   const stock = (await c.query(`SELECT item, item_type, sum(qty)::float AS qty FROM movements GROUP BY item, item_type`)).rows;
   put('movements', stock.map(r => ({ id: `base:${r.item}`, item: r.item, itemType: r.item_type, qty: r.qty, kind: 'Balance', key: null })));

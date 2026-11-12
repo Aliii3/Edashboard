@@ -1,15 +1,15 @@
 import { DELIVERY_STATUSES } from '@commerce-os/domain';
 import { Session } from './api.js';
 import { Repo, esc, fail, round2, sum } from '@commerce-os/domain';
-import { Guards, S, TERMINAL_DELIVERY, activeDelivery, availableOf, bomCost, calc, carrierKey, contributionOf, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, log, orderOf, orderValue, overdueWhy, paymentStatus, reservedOf, stockOnHand, tol } from '@commerce-os/domain';
-import { badge, btn, card, carrierA, courierOptions, custA, dateF, delA, fd, fdt, grid, heading, initials, kpi, m, note, orderA, pad, row, search, sel, simpleTable, tabs, timeline, ui } from './ui-kit.js';
+import { WALK_IN, Guards, S, TERMINAL_DELIVERY, activeDelivery, availableOf, bomCost, calc, carrierKey, contributionOf, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, log, orderOf, orderValue, overdueWhy, paymentStatus, reservedOf, stockOnHand, tol } from '@commerce-os/domain';
+import { badge, btn, card, carrierA, courierOptions, custA, dateF, delA, fd, fdt, grid, heading, initials, kpi, m, note, orderA, pad, row, search, sel, simpleTable, skuA, tabs, timeline, ui } from './ui-kit.js';
 import { caseButtons } from './views-core.js';
 import { A } from './actions.js';
 import { VIEWS, render } from './main.js';
 /* ==========================================================================
    LAYER 5 · VIEWS: CRM, Inventory and production, Shipping, Private delivery
    ========================================================================== */
-function customerTags(c) { const n = Repo.by('orders', 'customerId', c.id).filter(o => o.status !== 'Cancelled').length; return [...new Set([...(c.tags || []), ...(n >= 2 ? ['Repeat'] : [])])]; }
+function customerTags(c) { const n = c.id === WALK_IN ? 0 : Repo.by('orders', 'customerId', c.id).filter(o => o.status !== 'Cancelled').length; return [...new Set([...(c.tags || []), ...(n >= 2 ? ['Repeat'] : [])])]; }
 function customerStats(c) {
   const os = Repo.by('orders', 'customerId', c.id), real = os.filter(o => o.status !== 'Cancelled');
   let del = 0, ret = 0; for (const o of os) for (const l of linesOf(o)) { del += l.delivered; ret += l.returned; }
@@ -61,8 +61,8 @@ function inventoryView() {
   const q = st.q.trim().toLowerCase();
   const body = {
     'Finished goods': () => `<section class="card"><div class="filters">${search('inv.q', 'Search SKU or product…', 'skus')}</div>${grid('skus', skus.filter(s => !q || `${s.id} ${s.name} ${s.variant}`.toLowerCase().includes(q)), [
-      { k: 'id', label: 'SKU', sort: s => s.id, render: s => `<strong>${esc(s.id)}</strong>` },
-      { k: 'n', label: 'Product / variant', sort: s => s.name, render: s => `${esc(s.name)}<br><small>${esc(s.variant)}</small>` },
+      { k: 'id', label: 'SKU', sort: s => s.id, render: s => `<strong>${skuA(s.id)}</strong>` },
+      { k: 'n', label: 'Product / variant', sort: s => s.name, render: s => `${skuA(s.id, s.name)}<br><small>${esc(s.variant)}</small>` },
       { k: 'h', label: 'On hand', num: true, sort: s => stockOnHand(s.id), render: s => stockOnHand(s.id) },
       { k: 'r', label: 'Reserved', num: true, sort: s => reservedOf(s.id), render: s => reservedOf(s.id) },
       { k: 'a', label: 'Available', num: true, sort: s => availableOf(s.id), render: s => `<strong>${availableOf(s.id)}</strong>` },
@@ -120,13 +120,14 @@ function deliveryActions(d) {
     case 'Return in Transit': add('Receive at warehouse', 'receive', d.id, null, 1); break;
   }
   if (d.completedAt && due > tol()) add('Record collection', 'collectModal', d.id, null, !a.length);
+  if (d.mode === 'courier' && !TERMINAL_DELIVERY.has(d.status)) add(d.tracking ? 'Edit tracking no.' : 'Add tracking no.', 'trackingModal', d.id);
   return a;
 }
 const rowActions = d => { const a = deliveryActions(d).filter(x => !x.why || x.primary), p = a.find(x => x.primary); return (p ? btn(p.label, p.name, p.arg, { cls: 'small primary', why: p.why }) : '') + btn('Details', 'openDelivery', d.id, { cls: 'small' }); };
 const deliveryOutcome = d => { const o = orderOf(d.orderId); const c = deliveryCash(d); if (d.mode === 'courier') return courierOutcome(d); const exp = expectedFromCustomer(d); if (!d.completedAt) return exp > 0 && c.collected === 0 ? 'Pending' : 'Not due'; if (c.cash === 0 && c.collected === 0) return exp > tol() ? 'Pending' : 'Reconciled'; if (exp - c.collected > tol()) return 'Partially collected'; return c.unhanded > tol() ? 'Pending' : 'Reconciled'; };
 function deliveryCols(o = {}) {
   return [
-    { k: 'id', label: 'Delivery / order', sort: d => d.id, render: d => `${delA(d)}<br><small>${orderA(d.orderId)}</small>` },
+    { k: 'id', label: 'Delivery / order', sort: d => d.id, render: d => `${delA(d)}<br><small>${orderA(d.orderId)}${d.tracking ? ` · ${esc(d.tracking)}` : ''}</small>` },
     ...(o.carrier ? [{ k: 'car', label: 'Carrier', render: d => carrierA(d) }] : []),
     { k: 'c', label: 'Customer', render: d => { const c = customerOf(orderOf(d.orderId)); return `${custA(c)}<br><small>${esc(c.phone)}</small>`; } },
     { k: 'ad', label: 'Address / instructions', wrap: true, render: d => { const x = orderOf(d.orderId); return `<span class="clip">${esc(x.address)}</span>${x.instructions ? `<br><small>${esc(x.instructions)}</small>` : ''}`; } },
@@ -148,18 +149,22 @@ function shippingView() {
   const q = st.q.trim().toLowerCase();
   const body = {
     'Dispatch queue': () => {
-      const unassigned = Repo.all('orders').filter(o => ['Confirmed', 'Processing', 'Ready'].includes(o.status) && !activeDelivery(o));
+      /* Three steps: pack, ship, hand to the carrier. Selection is shared, so one set of ticks can go through all three. */
+      const os = Repo.all('orders'), packing = os.filter(o => o.status === 'Confirmed' || o.status === 'Processing'), ready = os.filter(o => o.status === 'Ready' && !activeDelivery(o));
       const waiting = all.filter(d => d.status === 'Assigned');
-      return card('Needs a carrier', `${grid('dq', unassigned, [
-        { k: 'sel', label: '', render: o => `<input type="checkbox" aria-label="Select order ${o.id}" data-sel="${o.id}" ${ui.selected.has(o.id) ? 'checked' : ''}>` },
+      const selCol = { k: 'sel', label: '', render: o => `<input type="checkbox" aria-label="Select order ${o.id}" data-sel="${o.id}" ${ui.selected.has(o.id) ? 'checked' : ''}>` };
+      const orderCols = last => [selCol,
         { k: 'i', label: 'Order', sort: o => o.id, render: o => `${orderA(o.id)}<br><small>${fd(o.at)}</small>` },
         { k: 'c', label: 'Customer / area', render: o => `${custA(customerOf(o))}<br><small>${esc(o.area)}</small>` },
-        { k: 'n', label: 'Units', num: true, render: o => linesOf(o).reduce((n, l) => n + l.qty, 0) },
+        { k: 'it', label: 'Items', wrap: true, render: o => `<small>${linesOf(o).map(l => `${l.qty} × ${esc(l.name)} ${esc(l.variant)}`).join('<br>')}</small>` },
         { k: 'v', label: 'To collect', num: true, render: o => m(Math.max(0, calc(o).value - calc(o).paid)) },
-        { k: 's', label: 'Status', render: o => badge(o.status) },
-        { k: 'a', label: '', render: o => btn('Assign', 'assignModal', [o.id], { cls: 'small primary' }) },
-      ], { sort: 'i', dir: 1, size: 10, empty: 'Every confirmed order has a carrier.' })}<div class="pad">${btn('Assign selected', 'bulkAssign', undefined, { why: ui.selected.size ? '' : 'Select orders in the list above first.' })}</div>`, 'Two fulfillment options: external courier or private delivery. Both use the same records.')
-        + `<div class="sp"></div>` + card('Awaiting pickup', grid('dw', waiting, deliveryCols({ carrier: true }), { sort: 'as', dir: 1, size: 10, empty: 'Nothing is waiting for pickup.' }), 'Pickup needs the order to be Ready. It converts the reservation into a stock deduction.');
+        { k: 's', label: 'Status', render: o => badge(o.status) }, last];
+      const pick = ids => ids.filter(id => ui.selected.has(id)).length;
+      const nPack = pick(packing.map(o => o.id)), nReady = pick(ready.map(o => o.id)), nWait = pick(waiting.map(d => d.orderId));
+      return note('<strong>1. Pack</strong> the confirmed orders and mark them Ready. <strong>2. Ship</strong> the Ready ones: choose the driver or courier, and record the pickup in the same step if they are taking the parcels now. <strong>3. Print</strong> the shipping labels. A carrier can only be assigned once an order is Ready.')
+        + card(`1 · To pack (${packing.length})`, `${grid('dp', packing, orderCols({ k: 'a', label: '', render: o => btn('Mark ready', 'advance', [o.id, 'Ready'], { cls: 'small primary' }) }), { sort: 'i', dir: 1, size: 10, empty: 'Nothing to pack. Confirmed orders appear here.' })}<div class="pad actions">${btn('Mark selected ready', 'bulkReady', undefined, { why: nPack ? '' : 'Tick orders in this list first.' })}${btn('Print packing slips (invoice)', 'bulkPrint', 'invoice', { why: nPack ? '' : 'Tick orders in this list first.' })}</div>`, 'Confirmed orders with stock reserved')
+        + `<div class="sp"></div>` + card(`2 · Ready to ship (${ready.length})`, `${grid('dq', ready, orderCols({ k: 'a', label: '', render: o => btn('Ship', 'shipModal', [o.id], { cls: 'small primary' }) }), { sort: 'i', dir: 1, size: 10, empty: 'No packed orders are waiting for a carrier.' })}<div class="pad actions">${btn('Ship selected', 'bulkShip', undefined, { why: nReady ? '' : 'Tick orders in this list first.' })}${btn('Print labels', 'bulkPrint', 'label', { why: nReady ? '' : 'Tick orders in this list first.' })}</div>`, 'External courier or private driver. Both use the same records.')
+        + `<div class="sp"></div>` + card(`3 · Waiting for pickup (${waiting.length})`, `${grid('dw', waiting, [{ k: 'sel', label: '', render: d => `<input type="checkbox" aria-label="Select order ${d.orderId}" data-sel="${d.orderId}" ${ui.selected.has(d.orderId) ? 'checked' : ''}>` }, ...deliveryCols({ carrier: true })], { sort: 'as', dir: 1, size: 10, empty: 'Nothing is waiting for pickup.' })}<div class="pad actions">${btn('Record pickup for selected', 'bulkPickup', undefined, { why: nWait ? '' : 'Tick deliveries in this list first.' })}${btn('Print labels', 'bulkPrint', 'label', { why: nWait ? '' : 'Tick deliveries in this list first.' })}</div>`, 'Pickup converts the reservation into a stock deduction.');
     },
     'External couriers': () => {
       const couriers = Repo.all('couriers');
@@ -200,7 +205,7 @@ function driverCard(d) {
   const s = driverStats(d.id), c = driverCash(d.id), inactive = d.active === false;
   return `<article class="driver-card ${inactive ? 'is-inactive' : ''}"><header><span class="avatar">${esc(initials(d.name))}</span><div><h3><a class="link stretch" href="#/drivers/${d.id}">${esc(d.name)}</a></h3><small>${esc(d.phone)} · ${esc(d.vehicle || '')}</small></div>${badge(inactive ? 'Inactive' : d.availability)}</header>
   <div class="dc-grid"><div><small>Awaiting pickup</small><b>${s.awaiting}</b></div><div><small>In custody</small><b>${s.custody}</b></div><div><small>Out for delivery</small><b>${s.ofd}</b></div><div><small>Completed</small><b>${s.completed}</b></div><div><small>Failed attempts</small><b>${s.failed}</b></div></div>
-  ${row('Expected COD, active', m(c.expected))}${row('Cash collected', m(c.collected))}${row('Handed over', m(c.handed))}${row('Outstanding held cash', m(c.outstanding), c.outstanding > tol() ? 'total warn' : 'total')}
+  ${row('Expected COD, active', m(c.expected))}${row('Cash collected', m(c.collected))}${row('Handed over', m(c.handed))}${row('Outstanding held cash', m(c.outstanding), c.outstanding > tol() ? 'total warn' : 'total')}${c.outstanding > tol() ? `<div class="dc-act">${btn('Receive cash', 'handoverModal', d.id, { cls: 'small primary' })}</div>` : ''}
   <footer><small>${s.latest ? `${esc(s.latest.text.slice(0, 80))} · ${fdt(s.latest.at)}` : 'No activity yet'}</small></footer></article>`;
 }
 function driverProfile(id) {
@@ -220,7 +225,7 @@ function driverProfile(id) {
     'Completed & history': () => grid(`d-his-${id}`, applyF(s.deliveries.filter(x => TERMINAL_DELIVERY.has(x.status))), deliveryCols(), { sort: 'as', empty: 'No past deliveries match. History is kept even after a driver becomes inactive.' }),
     'Failed & retry': () => grid(`d-fail-${id}`, applyF(s.deliveries.filter(x => ['Failed Attempt', 'Retry Scheduled'].includes(x.status))), deliveryCols(), { sort: 'as', empty: 'No failed attempts are awaiting follow-up.' }),
     'Returns awaiting handover': () => grid(`d-ret-${id}`, applyF(s.deliveries.filter(x => ['Return in Transit', 'Partially Delivered'].includes(x.status))), deliveryCols(), { sort: 'as', empty: 'No parcels are waiting to go back to the warehouse.' }),
-    'Cash': () => pad(`<div class="cash-formula"><div><small>Cash collected</small><b>${m(c.collected)}</b></div><i>−</i><div><small>Handed over</small><b>${m(c.handed)}</b></div><i>−</i><div><small>Approved cash expenses</small><b>${m(c.approvedCash)}</b></div><i>−</i><div><small>Cash refunds</small><b>${m(c.refunds)}</b></div><i>=</i><div class="res"><small>Outstanding</small><b>${m(c.outstanding)}</b></div></div><p class="inlinehelp">Non-cash payments collected on this driver's deliveries (${m(c.nonCash)}) went straight to the business and are excluded. Expected on active deliveries: ${m(c.expected)}. Pending expenses: ${m(c.pendingExp)}. Open discrepancies: ${m(c.openDisc)}.</p>`)
+    'Cash': () => pad(`${Session.can('recordHandover') || Session.isDriver ? '' : note('Cash from drivers is received by finance or the owner. Ask them to record it when the driver hands it over.')}<div class="cash-formula"><div><small>Cash collected</small><b>${m(c.collected)}</b></div><i>−</i><div><small>Handed over</small><b>${m(c.handed)}</b></div><i>−</i><div><small>Approved cash expenses</small><b>${m(c.approvedCash)}</b></div><i>−</i><div><small>Cash refunds</small><b>${m(c.refunds)}</b></div><i>=</i><div class="res"><small>Outstanding</small><b>${m(c.outstanding)}</b></div></div><p class="inlinehelp">Non-cash payments collected on this driver's deliveries (${m(c.nonCash)}) went straight to the business and are excluded. Expected on active deliveries: ${m(c.expected)}. Pending expenses: ${m(c.pendingExp)}. Open discrepancies: ${m(c.openDisc)}.</p>`)
       + `<h3 class="sub">Customer collections</h3>` + simpleTable(['When', 'Reference', 'Order', 'Delivery', 'Method', 'Amount'], colls.slice(0, 50).map(p => `<tr><td>${fdt(p.at)}</td><td>${esc(p.ref)}</td><td>${orderA(p.orderId)}</td><td>${esc(p.deliveryId || '—')}</td><td>${esc(p.method)}</td><td class="${p.amount < 0 ? 'negative' : ''}">${m(p.amount)}${p.reason ? `<br><small>${esc(p.reason)}</small>` : ''}</td></tr>`), 'No cash collected yet.')
       + `<h3 class="sub">Cash handovers to the business</h3>` + simpleTable(['Date', 'Reference', 'Received by', 'Amount', 'Allocated to'], hos.map(h => `<tr><td>${fdt(h.at)}</td><td>${esc(h.ref)}</td><td>${esc(h.receivedBy)}</td><td>${m(h.amount)}</td><td class="wrap"><small>${Repo.by('handoverAllocs', 'handoverId', h.id).map(a => `${a.deliveryId} ${m(a.amount)}`).join(' · ')}</small></td></tr>`), 'No handovers yet.')
       + `<h3 class="sub">Expenses and deductions</h3>` + simpleTable(['Date', 'ID', 'Category', 'Amount', 'From collected cash', 'Status', ''], exps.map(e => `<tr><td>${fd(e.at)}</td><td>${e.id}</td><td>${esc(e.category)}</td><td>${m(e.amount)}</td><td>${e.paidFromCash ? 'Yes' : 'No'}</td><td>${badge(e.status)}</td><td>${e.status === 'Pending' ? btn('Approve', 'decideExp', [e.id, 'Approved'], { cls: 'small primary' }) + btn('Reject', 'decideExp', [e.id, 'Rejected'], { cls: 'small' }) : ''}</td></tr>`), 'No expenses submitted.')
@@ -229,7 +234,7 @@ function driverProfile(id) {
   };
   const areas = [...new Set(s.deliveries.map(x => x.area))].sort();
   const tabFilters = !['Cash', 'Activity'].includes(f.tab);
-  return heading(esc(d.name), `${esc(d.phone)} · ${esc(d.vehicle || 'Vehicle not set')} · Zones: ${esc(d.zones || 'not set')}`, `${inactive || !Session.can('setAvailability') ? '' : `<label class="fsel inline"><span>Availability</span><select data-avail="${d.id}">${['Available', 'Busy', 'Off duty'].map(x => `<option value="${x}" ${x === d.availability ? 'selected' : ''}>${x}</option>`).join('')}</select></label>`}${btn('Edit', 'driverModal', d.id)}${btn('Assign orders', 'assignPicker', d.id, { why: inactive ? 'This driver is inactive.' : d.availability === 'Off duty' ? 'This driver is off duty.' : '' })}${btn('Add expense', 'expenseDriverModal', d.id)}${btn('Record cash handover', 'handoverModal', d.id, { cls: 'primary', why: c.outstanding <= 0 ? 'This driver holds no outstanding cash.' : '' })}`, Session.isDriver ? '' : `<a href="#/shipping">Shipping</a> / Private delivery / ${esc(d.name)}`)
+  return heading(esc(d.name), `${esc(d.phone)} · ${esc(d.vehicle || 'Vehicle not set')} · Zones: ${esc(d.zones || 'not set')}`, `${inactive || !Session.can('setAvailability') ? '' : `<label class="fsel inline"><span>Availability</span><select data-avail="${d.id}">${['Available', 'Busy', 'Off duty'].map(x => `<option value="${x}" ${x === d.availability ? 'selected' : ''}>${x}</option>`).join('')}</select></label>`}${btn('Edit', 'driverModal', d.id)}${btn('Assign orders', 'assignPicker', d.id, { why: inactive ? 'This driver is inactive.' : d.availability === 'Off duty' ? 'This driver is off duty.' : '' })}${btn('Add expense', 'expenseDriverModal', d.id)}${btn('Receive cash from driver', 'handoverModal', d.id, { cls: 'primary', why: c.outstanding <= 0 ? 'This driver holds no outstanding cash.' : '' })}`, Session.isDriver ? '' : `<a href="#/shipping">Shipping</a> / Private delivery / ${esc(d.name)}`)
     + (inactive ? note('This driver is inactive. Their delivery and cash history is preserved.', 'warning') : '')
     + `<div class="kpi-grid k4 mb">${kpi('In custody now', s.custody, `${s.ofd} out for delivery · ${s.awaiting} awaiting pickup`)}${kpi('Completed', s.completed, `${s.failed} failed attempts recorded`)}${kpi('Expected COD, active', m(c.expected), 'Still to collect on current parcels')}${kpi('Outstanding held cash', m(c.outstanding), `Collected ${m(c.collected)}, handed over ${m(c.handed)}`, { cls: c.outstanding > tol() ? 'hl' : '' })}</div>`
     + card(`Currently with this driver (${custody.length})`, grid(`d-cust-${id}`, custody, deliveryCols(), { sort: 'as', size: 10, empty: 'No parcels in this driver\'s custody right now.' }), 'Physical custody. A parcel leaves this list only through delivery, a driver handover or a warehouse receipt.', '', 'prominent')

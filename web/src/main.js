@@ -8,6 +8,7 @@ import { LOGO, NAV, card, chartHover, icon, iconBtn, initials, pad, setPath, ui 
 import { order360, ordersView, overview } from './views-core.js';
 import { crmView, driverProfile, inventoryView, shippingView } from './views-ops.js';
 import { campaignsView, financeView, roadmapView, settingsView } from './views-biz.js';
+import { productsView, staffView } from './views-more.js';
 import { A, closeModal, customerOptionsFor, field, globalSearch, handleCsv, modalLive, orderDraft, renderDraftLines, run, syncAssign, toast } from './actions.js';
 /* ==========================================================================
    LAYER 7 · APP SHELL: router, render loop, delegated events and startup.
@@ -18,9 +19,10 @@ function parseRoute() {
   if (head === 'customers' && parts[1]) return { page: 'crm', id: decodeURIComponent(parts[1]) };
   if (head === 'customers') return { page: 'crm', id: null };
   if (head === 'drivers' && parts[1]) return { page: 'driver', id: decodeURIComponent(parts[1]) };
+  if ((head === 'products' || head === 'staff') && parts[1]) return { page: head, id: decodeURIComponent(parts[1]) };
   return { page: NAV.some(n => n[0] === head) ? head : 'overview', id: null };
 }
-const VIEWS = { overview, orders: ordersView, order360, crm: crmView, inventory: inventoryView, shipping: shippingView, driver: () => driverProfile(ui.route.id), finance: financeView, campaigns: campaignsView, settings: settingsView, roadmap: roadmapView };
+const VIEWS = { overview, orders: ordersView, order360, crm: crmView, products: productsView, staff: staffView, inventory: inventoryView, shipping: shippingView, driver: () => driverProfile(ui.route.id), finance: financeView, campaigns: campaignsView, settings: settingsView, roadmap: roadmapView };
 let _renderQueued = false, _screenKey = '';
 function render() {
   if (!Session.user || !Repo.data) return;
@@ -35,7 +37,7 @@ function render() {
   const main = document.getElementById('main'), openEx = [...main.querySelectorAll('details[open]')].length;
   main.innerHTML = VIEWS[ui.route.page]() + `<div class="footerhint"><span>${esc(Session.user.name)}</span> · <span>${esc(Session.user.role)}</span> · <span>${Session.online ? 'Connected' : 'Reconnecting…'}</span> · <span>No live integrations, messages or payments.</span></div>`;
   /* A new screen or tab flows in. A re-render of the same screen (after a sync or a filter) doesn't. */
-  const key = `${location.hash}|${ui.inv?.tab}|${ui.ship?.tab}|${ui.fin?.tab}|${ui.set?.tab}|${ui.ov?.preset}`;
+  const key = `${location.hash}|${ui.inv?.tab}|${ui.ship?.tab}|${ui.fin?.tab}|${ui.set?.tab}|${ui.ov?.preset}|${ui.staff?.tab}`;
   if (key !== _screenKey) { _screenKey = key; enterScreen(main); } else refreshScreen(main);
   if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch { /* not a text input */ } } }
   void openEx;
@@ -77,6 +79,7 @@ function bindEvents() {
   });
   document.addEventListener('change', e => {
     const t = e.target;
+    if (t.dataset.attTime) return A.attTime([t.dataset.attTime, t.dataset.k, t.value]);
     if (t.dataset.f && !t.dataset.live) { setPath(t.dataset.f, t.value); if (t.dataset.t && ui.tbl[t.dataset.t]) ui.tbl[t.dataset.t].p = 0; return render(); }
     if (t.dataset.sel !== undefined) { const id = Number(t.dataset.sel); t.checked ? ui.selected.add(id) : ui.selected.delete(id); return render(); }
     if (t.dataset.selall) { JSON.parse(t.dataset.selall).forEach(id => t.checked ? ui.selected.add(id) : ui.selected.delete(id)); return render(); }
@@ -95,7 +98,7 @@ function bindEvents() {
     if (t.dataset.live) { setPath(t.dataset.f, t.value); clearTimeout(liveT); liveT = setTimeout(() => { if (t.dataset.t && ui.tbl[t.dataset.t]) ui.tbl[t.dataset.t].p = 0; render(); }, 180); return; }
     if (t.name === 'customerPick') { document.getElementById('custList').innerHTML = customerOptionsFor(t.value.includes(' · ') ? '' : t.value); return; }
     if (t.dataset.dlTotal) return renderDraftLines();
-    if (t.closest('#dialog') && modalLive && (t.dataset.alloc || t.dataset.deliver || t.dataset.amount)) modalLive(t.dataset.amount ? { target: t } : e);
+    if (t.closest('#dialog') && modalLive && (t.dataset.alloc || t.dataset.deliver || t.dataset.amount || t.dataset.mi)) modalLive(t.dataset.amount || t.dataset.mi ? { target: t } : e);
   });
   document.addEventListener('submit', e => {
     const f = e.target; if (!f.dataset.form) return; e.preventDefault();
@@ -128,7 +131,7 @@ function renderChrome() {
   document.getElementById('logoMark').innerHTML = LOGO(32);
   const rail = document.getElementById('rail'), link = (page, ic, label) => Session.canSee(page) ? `<a class="iconbtn" href="#/${page}" aria-label="${label}" title="${label}">${icon(ic)}</a>` : '';
   rail.hidden = Session.isDriver;
-  rail.innerHTML = Session.isDriver ? '' : [iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)'), iconBtn('plus', 'newOrder', undefined, 'New order'), iconBtn('upload', 'importModal', undefined, 'Import orders from CSV'), iconBtn('download', 'exportOrders', undefined, 'Export orders as CSV'), '<span class="rail-gap"></span>', link('orders', 'orders', 'Orders'), link('shipping', 'truck', 'Shipping'), link('finance', 'finance', 'Finance'), '<span class="rail-gap"></span>', link('roadmap', 'roadmap', 'Roadmap'), link('settings', 'settings', 'Settings')].join('');
+  rail.innerHTML = Session.isDriver ? '' : [iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)'), iconBtn('plus', 'newOrder', undefined, 'New order'), iconBtn('store', 'storeSaleModal', undefined, 'In-store sale'), iconBtn('upload', 'importModal', undefined, 'Import orders from CSV'), iconBtn('download', 'exportOrders', undefined, 'Export orders as CSV'), '<span class="rail-gap"></span>', link('orders', 'orders', 'Orders'), link('shipping', 'truck', 'Shipping'), link('finance', 'finance', 'Finance'), link('staff', 'staff', 'Staff'), '<span class="rail-gap"></span>', link('roadmap', 'roadmap', 'Roadmap'), link('settings', 'settings', 'Settings')].join('');
   document.getElementById('topActions').innerHTML = (Session.isDriver ? '' : iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)')) + iconBtn('refresh', 'syncNow', undefined, 'Get the latest changes') + langToggle();
 }
 async function enter() {
@@ -155,5 +158,5 @@ boot();
 export { VIEWS, _renderQueued, allowed, bindEvents, boot, enter, home, loginView, parseRoute, queueRender, render };
 /* Test builds only: exposes modules so browser tests can compare screens with records. */
 if (import.meta.env.MODE === 'e2e') {
-  Promise.all([import('@commerce-os/domain'), import('./ui-kit.js')]).then(([dom, kit]) => Object.assign(window, dom, kit, { render }));
+  Promise.all([import('@commerce-os/domain'), import('./ui-kit.js'), import('./print.js')]).then(([dom, kit, pr]) => Object.assign(window, dom, kit, pr, { render }));
 }

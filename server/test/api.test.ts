@@ -195,6 +195,40 @@ test('the one-request first load returns exactly what table-by-table paging does
   }
   assert.equal((await call('drv', 'GET', '/api/snapshot/batch')).status, 403);
 });
+test('in-store sales, one-step shipping and staff attendance through the API', async () => {
+  const page = async (who: string, t: string) => (await call(who, 'GET', `/api/snapshot?table=${t}&after=0`)).json().rows;
+  /* Counter sale: one request, delivered and paid, stock out. */
+  const stock = async () => Number((await pool.query(`SELECT sum(qty) AS n FROM movements WHERE item='TOT-NAT'`)).rows[0].n);
+  const s0 = await stock();
+  assert.equal((await cmd('wh', 'storeSale', { lines: [{ sku: 'TOT-NAT', qty: 1 }], payments: [{ method: 'Cash', amount: 350 }] })).status, 403);
+  const sale = await cmd('ops', 'storeSale', { lines: [{ sku: 'TOT-NAT', qty: 1 }], payments: [{ method: 'Cash', amount: 350 }] });
+  assert.equal(sale.status, 200, sale.body);
+  const so = sale.json().result;
+  assert.equal(so.status, 'Delivered'); assert.equal(await stock(), s0 - 1);
+  const del = (await pool.query(`SELECT mode, status FROM deliveries WHERE order_id=$1`, [so.id])).rows;
+  assert.deepEqual(del, [{ mode: 'store', status: 'Delivered' }]);
+  assert.equal((await pool.query(`SELECT holder_key FROM payments WHERE order_id=$1`, [so.id])).rows[0].holder_key, 'business');
+  /* Ship in one step, from Ready only. */
+  const o = await newOrder(); await cmd('ops', 'confirmOrder', o.id);
+  assert.equal((await cmd('ops', 'shipOrder', o.id, 'courier', 'BOSTA', { then: 'picked' })).status, 422);
+  await cmd('wh', 'advanceOrder', o.id, 'Ready');
+  const sh = await cmd('ops', 'shipOrder', o.id, 'courier', 'BOSTA', { then: 'picked', tracking: 'AWB-API-1' });
+  assert.equal(sh.status, 200, sh.body); assert.equal(sh.json().result.status, 'Picked Up');
+  assert.equal((await cmd('wh', 'setTracking', sh.json().result.id, 'AWB-API-2')).status, 200);
+  assert.equal((await pool.query(`SELECT tracking FROM deliveries WHERE id=$1`, [sh.json().result.id])).rows[0].tracking, 'AWB-API-2');
+  /* Attendance: operations records, finance reads, warehouse and drivers never receive it. */
+  const emp = (await cmd('ops', 'saveEmployee', { name: 'API Person', shiftStart: '09:00' })).json().result;
+  const day = dateKey(new Date().toISOString());
+  assert.equal((await cmd('fin', 'recordAttendance', { employeeId: emp, date: day, status: 'Present' })).status, 403);
+  assert.equal((await cmd('ops', 'recordAttendanceDay', day, [{ employeeId: emp, status: 'Late', checkIn: '09:25' }])).status, 200);
+  assert.equal((await cmd('ops', 'recordAttendance', { employeeId: emp, date: day, status: 'Present', checkIn: '08:55' })).status, 200);
+  assert.deepEqual((await pool.query(`SELECT status, check_in FROM attendance WHERE employee_id=$1`, [emp])).rows, [{ status: 'Present', check_in: '08:55' }]);
+  assert.ok((await page('fin', 'attendance')).length > 0);
+  assert.equal((await page('wh', 'attendance')).length, 0); assert.equal((await page('wh', 'employees')).length, 0);
+  const mine = (await call('drv', 'GET', '/api/snapshot/mine')).json();
+  assert.equal((mine.tables.attendance || []).length + (mine.tables.employees || []).length, 0);
+  await full(); assert.deepEqual(integrity().filter((x: any) => !x.ok), []);
+});
 test('closing the books locks past figures', async () => {
   await full();
   const yesterday = dateKey(new Date(Date.now() - 864e5).toISOString()), noonYesterday = new Date(yesterday + 'T10:00:00Z').toISOString();
