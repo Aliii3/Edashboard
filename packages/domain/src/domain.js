@@ -211,6 +211,7 @@ function bomCost(sku) {
   const b = Repo.get('boms', sku); if (!b) return { materials: 0, packaging: 0, labor: 0, overhead: 0, total: 0 };
   let materials = 0, packaging = 0;
   for (const x of b.lines) { const m = Repo.get('materials', x.material); const v = x.qty * m.cost; if (m.category === 'Packaging') packaging += v; else materials += v; }
+  materials += Number(b.buyCost) || 0;   // a bought, ready-made product: its purchase cost counts as its materials
   return { materials: round2(materials), packaging: round2(packaging), labor: b.labor, overhead: b.overhead, total: round2(materials + packaging + b.labor + b.overhead) };
 }
 
@@ -836,7 +837,7 @@ const Commands = {
   createProduction({ sku, qty, due }) {
     return Repo.tx(() => {
       qty = Number(qty); if (!Repo.get('skus', sku)) fail('Choose a SKU.');
-      if (!Repo.get('boms', sku)) fail(`${sku} has no bill of materials.`);
+      if (!Repo.get('boms', sku)?.lines.length) fail(`${sku} has no bill of materials. A bought product is added to stock with Adjust stock, not produced.`);
       if (!Number.isInteger(qty) || qty < 1 || qty > 5000) fail('Quantity must be 1 to 5000 units.');
       const id = 'MO-' + Repo.nextId('MO', 201);
       Repo.insert('production', { id, sku, qty, due: due || '', status: 'Planned', at: Clock.now(), startedAt: null, completedAt: null, unitCost: bomCost(sku).total });
@@ -876,14 +877,31 @@ const Commands = {
       const name = (f.name || '').trim(); if (!name) fail('Enter a product name.');
       if (!(Number(f.price) > 0)) fail('Enter a positive price.');
       const row = { name, variant: (f.variant || '').trim(), price: Number(f.price), min: Number(f.min) || 0 };
-      const bomLines = (f.bom || []).filter(x => Number(x.qty) > 0).map(x => ({ material: x.material, qty: Number(x.qty) }));
-      if (!bomLines.length) fail('A SKU needs at least one material in its bill of materials.');
-      const bom = { lines: bomLines, labor: Number(f.labor) || 0, overhead: Number(f.overhead) || 0 };
+      const bought = !!f.bought, buyCost = bought ? Number(f.buyCost) || 0 : 0;
+      const bomLines = bought ? [] : (f.bom || []).filter(x => Number(x.qty) > 0).map(x => ({ material: x.material, qty: Number(x.qty) }));
+      if (!bought && !bomLines.length) fail('A SKU needs at least one material in its bill of materials.');
+      if (buyCost < 0) fail('Purchase cost cannot be negative.');
+      const bom = { lines: bomLines, labor: bought ? 0 : Number(f.labor) || 0, overhead: bought ? 0 : Number(f.overhead) || 0, buyCost };
       const existing = Repo.get('skus', id);
       if (f.isNew && existing) fail(`SKU ${id} already exists.`);
       if (existing) { Repo.update('skus', existing, row); Repo.update('boms', Repo.get('boms', id), bom); }
       else { Repo.insert('skus', { id, ...row }); Repo.insert('boms', { id, ...bom }); }
       log(`SKU ${id} saved · new orders use the new cost, existing orders keep their snapshot`, {});
+    });
+  },
+  /* A material, supply or any other stock item that is not sold on its own. */
+  saveMaterial(f) {
+    return Repo.tx(() => {
+      const name = (f.name || '').trim(); if (!name) fail('Enter a name.');
+      const unit = (f.unit || '').trim(), category = (f.category || '').trim();
+      if (!unit) fail('Enter a unit, for example pcs, m or kg.');
+      if (!category) fail('Enter a category, for example Fabric, Packaging or Supplies.');
+      const row = { name, unit, category, cost: Number(f.cost) || 0, min: Number(f.min) || 0 };
+      if (row.cost < 0 || row.min < 0) fail('Cost and reorder level cannot be negative.');
+      const existing = f.id ? Repo.get('materials', f.id) : null; if (f.id && !existing) fail('Unknown item.');
+      if (existing) { Repo.update('materials', existing, row); log(`Item ${existing.id} updated`, {}); return existing.id; }
+      let id; do { id = 'MAT-' + Repo.nextId('MAT', 1); } while (Repo.get('materials', id));
+      Repo.insert('materials', { id, ...row }); log(`Item ${id} · ${name} created`, {}); return id;
     });
   },
   receiveMaterial({ item, qty, ref }) {
@@ -953,7 +971,7 @@ const Commands = {
     return Repo.tx(() => {
       if (!f.name?.trim()) fail('Enter a campaign name.');
       if (f.end && f.start && f.end < f.start) fail('End date must be on or after the start date.');
-      const row = { name: f.name.trim(), platform: f.platform, start: f.start, end: f.end, budget: Number(f.budget) || 0, reportedRoas: Number(f.reportedRoas) || 0, source: 'Manual', metaId: String(f.metaId ?? '').trim() || null };
+      const row = { name: f.name.trim(), platform: f.platform, start: f.start, end: f.end, budget: Number(f.budget) || 0, reportedRoas: Number(f.reportedRoas) || 0, source: 'Manual', metaId: String(f.metaId ?? '').trim() || null, closed: !!f.closed };
       if (row.metaId && !/^[0-9A-Za-z_-]{3,40}$/.test(row.metaId)) fail('A Meta campaign ID is letters, digits, dashes or underscores, as shown in Ads Manager.');
       if (row.budget < 0 || row.reportedRoas < 0) fail('Budget and ROAS cannot be negative.');
       if (f.id) { Repo.update('campaigns', Repo.get('campaigns', f.id), row); log(`Campaign ${row.name} updated`, {}); return f.id; }

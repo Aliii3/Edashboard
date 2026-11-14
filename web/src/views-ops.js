@@ -72,7 +72,7 @@ function inventoryView() {
       { k: 's', label: 'Health', sort: s => skuHealth(s), render: s => badge(skuHealth(s)) },
       { k: 'x', label: '', render: s => btn('Adjust', 'stockModal', ['sku', s.id], { cls: 'small' }) + btn('Edit', 'skuModal', s.id, { cls: 'small' }) },
     ], { sort: 'id', dir: 1, empty: 'No SKUs match.' })}</section>`,
-    'Raw materials': () => card('Materials', simpleTable(['Material', 'Category', 'On hand', 'Reorder at', ...(Session.seesCosts ? ['Unit cost', 'Stock value'] : []), 'Health', ''], mats.map(x => { const o = stockOnHand(x.id); return `<tr><td><strong>${esc(x.id)}</strong><br><small>${esc(x.name)}</small></td><td>${esc(x.category)}</td><td>${o} ${esc(x.unit)}</td><td>${x.min} ${esc(x.unit)}</td>${Session.seesCosts ? `<td>${m(x.cost)}</td><td>${m(o * x.cost)}</td>` : ''}<td>${badge(o < x.min ? 'Low stock' : 'Healthy')}</td><td>${btn('Receive', 'materialModal', x.id, { cls: 'small' })}${btn('Adjust', 'stockModal', ['material', x.id], { cls: 'small' })}</td></tr>`; })), 'Starting production consumes these. Purchase receipts need a unique reference per material.'),
+    'Raw materials': () => materialsCard(mats),
     'Production': () => note('<strong>Raw materials → Work in progress → Finished goods → Orders.</strong> Starting consumes the BOM once. Completing receives finished goods once. Unique journal keys block a repeat of either.') + card('Production orders', grid('prod', prod, [
       { k: 'i', label: 'Order', sort: p => p.id, render: p => esc(p.id) },
       { k: 's', label: 'SKU', render: p => `${esc(p.sku)}<br><small>${esc(Repo.get('skus', p.sku)?.name)}</small>` },
@@ -242,4 +242,7 @@ function driverProfile(id) {
     + `<section class="card">${tabFilters ? `<div class="filters">${dateF('drv.from', 'Assigned from')}${dateF('drv.to', 'To')}${sel('drv.status', 'Delivery status', [['', 'All'], ...DELIVERY_STATUSES])}${sel('drv.collection', 'Collection', [['', 'All'], 'Not due', 'Pending', 'Partially collected', 'Reconciled'])}${sel('drv.area', 'Area', [['', 'All'], ...areas])}</div>` : ''}${tb[f.tab]()}</section>`;
 }
 
-export { crmView, customerProfile, customerStats, customerTags, deliveryActions, deliveryCols, deliveryOutcome, driverCard, driverProfile, inventoryView, rowActions, shippingView, skuHealth };
+function materialsCard(mats = Repo.all('materials')) {
+  return card('Materials and supplies', simpleTable(['Material', 'Category', 'On hand', 'Reorder at', ...(Session.seesCosts ? ['Unit cost', 'Stock value'] : []), 'Health', ''], mats.map(x => { const o = stockOnHand(x.id); return `<tr><td><strong>${esc(x.id)}</strong><br><small>${esc(x.name)}</small></td><td>${esc(x.category)}</td><td>${o} ${esc(x.unit)}</td><td>${x.min} ${esc(x.unit)}</td>${Session.seesCosts ? `<td>${m(x.cost)}</td><td>${m(o * x.cost)}</td>` : ''}<td>${badge(o < x.min ? 'Low stock' : 'Healthy')}</td><td>${btn('Receive', 'materialModal', x.id, { cls: 'small' })}${btn('Edit', 'itemModal', x.id, { cls: 'small' })}${btn('Adjust', 'stockModal', ['material', x.id], { cls: 'small' })}</td></tr>`; })), 'Starting production consumes these. Purchase receipts need a unique reference per material.', btn('+ Item', 'itemModal', undefined, { cls: 'small' }));
+}
+export { crmView, materialsCard, customerProfile, customerStats, customerTags, deliveryActions, deliveryCols, deliveryOutcome, driverCard, driverProfile, inventoryView, rowActions, shippingView, skuHealth };

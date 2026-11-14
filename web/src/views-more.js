@@ -3,7 +3,7 @@ import { isAr } from './i18n.js';
 import { Repo, esc, round2, sum } from '@commerce-os/domain';
 import { ATTENDANCE_STATUSES, S, availableOf, bomCost, customerOf, dateKey, lateMinutes, netUnit, orderOf, productStats, reservedOf, stockOnHand } from '@commerce-os/domain';
 import { act, badge, btn, card, custA, dayShift, fd, fdt, grid, heading, kpi, lineChart, m, note, orderA, pad, row, search, simpleTable, tabs, today, ui } from './ui-kit.js';
-import { skuHealth } from './views-ops.js';
+import { materialsCard, skuHealth } from './views-ops.js';
 /* ==========================================================================
    LAYER 5 · VIEWS: Products (a profile per product, like customers) and
    Staff (daily attendance, the monthly sheet and employee profiles).
@@ -17,10 +17,10 @@ function productsView() {
   const list = skus.filter(s => !q || `${s.id} ${s.name} ${s.variant}`.toLowerCase().includes(q));
   const t = { kept: 0, revenue: 0, delivered: 0, returned: 0 }; for (const x of stats.values()) for (const k in t) t[k] += x[k];
   const st = id => stats.get(id);
-  return heading('Products', 'Sales, returns, customers and stock for every product, with a profile for each one.', btn('+ SKU', 'skuModal', undefined, { cls: 'primary' }))
+  return heading('Products', 'Sales, returns, customers and stock for every product, with a profile for each one.', btn('+ New item', 'newItemModal', undefined, { cls: 'primary' }))
     + `<div class="kpi-grid k4 mb">${kpi('Products', skus.length, 'SKUs, one per variant')}${kpi('Units sold', t.kept.toLocaleString('en-US'), 'Delivered and kept')}${kpi('Product revenue', m(t.revenue), 'After discounts, delivery fees excluded')}${kpi('Return rate', pct(t.returned, t.delivered), 'Returned ÷ delivered units')}</div>`
     + `<section class="card"><div class="filters">${search('products.q', 'Search product or SKU…', 'prods')}</div>${grid('prods', list, [
-      { k: 'n', label: 'Product', sort: s => s.name, render: s => `<a class="link" href="#/products/${esc(s.id)}">${esc(s.name)}</a><br><small>${esc(s.variant)} · ${esc(s.id)}</small>` },
+      { k: 'n', label: 'Product', sort: s => s.name, render: s => `<a class="link" href="#/products/${esc(s.id)}">${esc(s.name)}</a><br><small>${esc(s.variant)} · ${esc(s.id)}${Repo.get('boms', s.id)?.lines.length === 0 ? ' · <span>Bought ready-made</span>' : ''}</small>` },
       { k: 'u', label: 'Units sold', num: true, sort: s => st(s.id).kept, render: s => st(s.id).kept.toLocaleString('en-US') },
       { k: 'r', label: 'Revenue', num: true, sort: s => st(s.id).revenue, render: s => m(st(s.id).revenue) },
       { k: 'c', cost: true, label: 'Gross profit', num: true, sort: s => st(s.id).revenue - st(s.id).cogs, render: s => m(st(s.id).revenue - st(s.id).cogs) },
@@ -28,7 +28,7 @@ function productsView() {
       { k: 'a', label: 'Available', num: true, sort: s => availableOf(s.id), render: s => availableOf(s.id) },
       { k: 'l', label: 'Last ordered', sort: s => st(s.id).last, render: s => st(s.id).last ? fd(st(s.id).last) : '<span class="muted">Never</span>' },
       { k: 'h', label: 'Stock', sort: s => skuHealth(s), render: s => badge(skuHealth(s)) },
-    ], { sort: 'r', empty: 'No products match. Try a different search.' })}</section>`;
+    ], { sort: 'r', empty: 'No products match. Try a different search.' })}</section><div class="sp"></div>${Session.canSee('inventory') ? materialsCard() : ''}`;
 }
 /* Twelve weeks ending today. */
 function weekBuckets() {

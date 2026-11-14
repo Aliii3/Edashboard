@@ -39,7 +39,7 @@ export function scopeFor(name: string, a: any[]): Scope {
     case 'recordAttendanceDay': return scope({ attendance: Array.isArray(a[1]) ? a[1].map((x: any) => attId(x, a[0])) : [] });
     case 'removeAttendance': return scope({ attendance: [a[0]] });
     case 'saveEmployee': return scope();
-    case 'adjustStock': case 'createProduction': case 'receiveMaterial': case 'saveSku': case 'saveCampaign': case 'addExpense':
+    case 'adjustStock': case 'createProduction': case 'receiveMaterial': case 'saveSku': case 'saveMaterial': case 'saveCampaign': case 'addExpense':
     case 'setAvailability': case 'saveCourier': case 'saveSettings': case 'setRoadmap': return scope();
     default: throw new Error(`No data scope defined for ${name}`);
   }

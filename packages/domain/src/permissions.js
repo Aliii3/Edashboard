@@ -9,7 +9,7 @@ export const COMMAND_ROLES = {
   assign: [OPS], shipOrder: [OPS], setTracking: [OPS, WH], storeSale: [OPS], reassign: [OPS], driverHandover: [OPS], pickup: [OPS, WH], setDeliveryStatus: [OPS, DRV], deliver: [OPS, DRV], collect: [OPS, FIN, DRV], prepay: [OPS, FIN], startReturn: [OPS, DRV], receiveAtWarehouse: [OPS, WH],
   recordHandover: [FIN], addDriverExpense: [OPS, FIN, DRV], decideDriverExpense: [FIN], resolveDiscrepancy: [FIN], recordSettlement: [FIN], refund: [FIN],
   openCase: [OPS], acceptReturn: [OPS, WH], rejectCase: [OPS, WH], createReplacement: [OPS], closeCase: [OPS, FIN],
-  adjustStock: [OPS, WH], createProduction: [OPS, WH], startProduction: [OPS, WH], completeProduction: [OPS, WH], cancelProduction: [OPS, WH], saveSku: [OPS], receiveMaterial: [OPS, WH],
+  adjustStock: [OPS, WH], createProduction: [OPS, WH], startProduction: [OPS, WH], completeProduction: [OPS, WH], cancelProduction: [OPS, WH], saveSku: [OPS], saveMaterial: [OPS], receiveMaterial: [OPS, WH],
   saveCustomer: [OPS], setCustomerTags: [OPS], logContact: [OPS, FIN],
   saveCampaign: [FIN], addSpend: [FIN], addExpense: [FIN], removeExpense: [FIN],
   saveDriver: [OPS], setAvailability: [OPS], saveCourier: [], saveSettings: [], setRoadmap: [],
@@ -36,7 +36,7 @@ export const ROLE_SCREENS = {
    deliveries only (see the driver snapshot on the server). */
 export const COST_ROLES = ['owner', 'finance'];
 export const seesCosts = role => COST_ROLES.includes(role);
-const COST_FIELDS = { lines: ['unitCost'], materials: ['cost'], boms: ['labor', 'overhead'], production: ['unitCost'], campaigns: ['budget', 'reportedRoas'] };
+const COST_FIELDS = { lines: ['unitCost'], materials: ['cost'], boms: ['labor', 'overhead', 'buyCost'], production: ['unitCost'], campaigns: ['budget', 'reportedRoas'] };
 const HIDDEN_TABLES = { operations: ['spend', 'expenses'], warehouse: ['spend', 'expenses', 'contacts', 'employees', 'attendance'], driver: ['spend', 'expenses', 'contacts', 'settlements', 'settlementAllocs', 'campaigns', 'materials', 'boms', 'production', 'movements', 'couriers', 'employees', 'attendance'] };
 export const canReadTable = (role, table) => !(HIDDEN_TABLES[role] || []).includes(table);
 /* Returns the row as this role may see it, or null when the role may not see it at all. */

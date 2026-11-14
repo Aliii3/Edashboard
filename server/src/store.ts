@@ -37,8 +37,9 @@ export function runCommand(user: User, name: string, args: any[]) {
       /* Roles that can't see costs can't change them: an edited SKU keeps its labor and overhead. */
       if (name === 'saveSku' && !seesCosts(user.role) && args[0] && typeof args[0] === 'object') {
         const b = Repo.get('boms', String(args[0].id ?? '').trim().toUpperCase());
-        args = [{ ...args[0], labor: b?.labor ?? 0, overhead: b?.overhead ?? 0 }, ...args.slice(1)];
+        args = [{ ...args[0], labor: b?.labor ?? 0, overhead: b?.overhead ?? 0, buyCost: b?.buyCost ?? 0 }, ...args.slice(1)];
       }
+      if (name === 'saveMaterial' && !seesCosts(user.role) && args[0] && typeof args[0] === 'object') args = [{ ...args[0], cost: Repo.get('materials', args[0].id)?.cost ?? 0 }, ...args.slice(1)];
       Actor.current = user.name; Repo.begin();
       let result: any, changes: Change[];
       try { result = Commands[name](...args); changes = [...Repo.capture.values()] as Change[]; }

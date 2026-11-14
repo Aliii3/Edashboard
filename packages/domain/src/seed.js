@@ -22,7 +22,7 @@ function seedMasters() {
   const skus = [['LIN-SND', 'Linen shirt', 'Sand / M', 890, 15, 'FAB-LIN', 1.6, 70, 25], ['LIN-OLV', 'Linen shirt', 'Olive / L', 890, 15, 'FAB-LIN', 1.7, 70, 25], ['TRS-BLK', 'Everyday trousers', 'Black / M', 1150, 12, 'FAB-LIN', 2.1, 90, 30], ['TEE-IVR', 'Essential tee', 'Ivory / M', 490, 20, 'FAB-COT', 1.2, 30, 15], ['TEE-BLK', 'Essential tee', 'Black / L', 490, 20, 'FAB-COT', 1.25, 30, 15], ['SET-OAT', 'Lounge set', 'Oat / L', 1650, 10, 'FAB-COT', 3.6, 120, 40], ['DRS-TER', 'Wrap dress', 'Terracotta / S', 1390, 10, 'FAB-LIN', 2.6, 110, 35], ['TOT-NAT', 'Canvas tote', 'Natural', 350, 25, 'FAB-CNV', 0.8, 20, 10]];
   for (const [id, name, variant, price, min, fab, q, labor, overhead] of skus) {
     Repo.insert('skus', { id, name, variant, price, min });
-    Repo.insert('boms', { id, lines: [{ material: fab, qty: q }, { material: 'TRM-KIT', qty: 1 }, { material: 'PKG-KIT', qty: 1 }], labor, overhead });
+    Repo.insert('boms', { id, lines: [{ material: fab, qty: q }, { material: 'TRM-KIT', qty: 1 }, { material: 'PKG-KIT', qty: 1 }], labor, overhead, buyCost: 0 });
     postMovement({ item: id, itemType: 'sku', qty: 90, kind: 'Opening balance', key: `open:${id}`, ref: 'Opening' });
   }
   Repo.insert('couriers', { id: 'BOSTA', name: 'Bosta', shipRate: 65, returnRate: 40, codFee: 15, active: true });
