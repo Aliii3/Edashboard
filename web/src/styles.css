@@ -228,3 +228,8 @@ table.sheet{font-size:11.5px}table.sheet th.ac{text-align:center;padding:6px 2px
 td.ac .acell,td.ac span{display:inline-block;min-width:24px;padding:3px 2px;border:0;border-radius:6px;background:transparent;font-size:11px;font-weight:650;box-shadow:none;color:inherit}
 .ac.st-present{background:#e3f6ee;color:#0b7a55}.ac.st-late{background:#fff1df;color:#a35a00}.ac.st-absent{background:#fde7ea;color:#c22a40}.ac.st-leave{background:#efe9ff;color:#5b3bd1}.ac.st-day-off{background:#eef0f6;color:var(--muted)}
 .att-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--ink2)}.att-legend b.ac{display:inline-block;min-width:22px;text-align:center;border-radius:5px;padding:1px 3px;margin-inline-end:4px;font-size:11px}
+/* Orders board: 2×2 stage boxes above the orders list */
+.grid.board{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:14px}
+.board-n{display:inline-block;min-width:22px;padding:0 7px;margin-inline-start:6px;border-radius:999px;background:var(--accent-soft,#2f80ff1f);font-size:13px;text-align:center}
+.board-chips{padding:0}
+@media (max-width:760px){.grid.board{grid-template-columns:1fr}}

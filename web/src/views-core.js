@@ -103,6 +103,23 @@ function exceptionsList(allO) {
   return rows.slice(0, 6).map(({ o, fl }) => `<div class="row"><span>${orderA(o.id)} · ${esc(customerOf(o).name)}</span><span class="tags">${fl.map(x => `<span class="flag">${esc(x)}</span>`).join('')}</span></div>`).join('') + (rows.length > 6 ? `<p class="inlinehelp">${rows.length - 6} more. ${btn('See failed deliveries in Orders →', 'goOrders', { exception: 'Failed delivery' }, { cls: 'link' })}</p>` : '') || '<p class="empty">No open exceptions.</p>';
 }
 
+/* ---------- Orders board: one box per stage, a few orders each with the next-step button. The arrow opens the full filtered list. ---------- */
+function ordersBoard() {
+  const all = Repo.all('orders'), newest = (a, b) => b.at.localeCompare(a.at), SHOW = 4;
+  const box = (title, status, list, step) => {
+    list.sort(newest);
+    const rows = list.slice(0, SHOW).map(o => `<div class="row"><span>${orderA(o.id)}<br><small>${esc(customerOf(o).name)}</small></span>${step(o)}</div>`).join('');
+    return card(`${title} <span class="board-n">${list.length}</span>`, pad((rows || '<p class="empty">No orders</p>') + (list.length > SHOW ? `<p class="inlinehelp">${btn(`+${list.length - SHOW} more`, 'goOrders', { status }, { cls: 'link' })}</p>` : '')), '', iconBtn('arrow', 'goOrders', { status }, 'See all'), 'board-box');
+  };
+  const shipped = all.filter(o => o.status === 'Shipped'), byCarrier = new Map();
+  for (const o of shipped) { const d = activeDelivery(o) || latestDelivery(o), k = d ? d.carrierKey : 'none'; if (!byCarrier.has(k)) byCarrier.set(k, { d, n: 0 }); byCarrier.get(k).n++; }
+  const carrierChip = ({ d, n }) => `<button type="button" class="chip" ${act('goOrders', d ? { status: 'Shipped', [d.mode === 'driver' ? 'driver' : 'courier']: d.carrierId } : { status: 'Shipped' })}><span>${esc(d ? carrierName(d) : 'Unassigned')}</span><b>${n}</b></button>`;
+  return `<div class="grid board">${box('New orders', 'New', all.filter(o => o.status === 'New'), o => btn('Confirm', 'confirmOrder', o.id, { cls: 'small primary', why: Guards.confirm(o) }))}
+    ${box('Confirmed orders', 'Confirmed', all.filter(o => o.status === 'Confirmed' || o.status === 'Processing'), o => btn('Mark ready', 'advance', [o.id, 'Ready'], { cls: 'small primary', why: Guards.ready(o) }))}
+    ${box('Ready to ship', 'Ready', all.filter(o => o.status === 'Ready'), o => btn('Ship', 'shipModal', [o.id], { cls: 'small primary', why: Guards.assign(o) }))}
+    ${card(`Shipped orders <span class="board-n">${shipped.length}</span>`, pad(byCarrier.size ? `<div class="chips board-chips">${[...byCarrier.values()].sort((a, b) => b.n - a.n).map(carrierChip).join('')}</div>` : '<p class="empty">No orders</p>'), 'With each courier and driver', iconBtn('arrow', 'goOrders', { status: 'Shipped' }, 'See all'), 'board-box')}</div>`;
+}
+
 /* ---------- Orders ---------- */
 function ordersView() {
   const list = filteredOrders(), f = ui.orders, hasF = Object.entries(f).some(([, v]) => v), selN = [...ui.selected].filter(id => Repo.get('orders', id)).length;
@@ -126,6 +143,7 @@ function ordersView() {
   const chips = `<div class="chips" role="group" aria-label="Filter by delivery status"><span class="chips-label">Delivery status</span>${chip('', 'All', base.length)}${['Unassigned', ...DELIVERY_STATUSES].filter(k => dc.get(k) || f.delivery === k).map(k => chip(k, k, dc.get(k) || 0)).join('')}</div>`;
   const need = selN ? '' : 'Select one or more orders first.';
   return heading('Orders', 'One record for every order, however it was entered. Entry method and sales channel are tracked separately.', `${btn('↓ Export filtered CSV', 'exportOrders')}${btn('Import CSV', 'importModal')}${btn('In-store sale', 'storeSaleModal')}${btn('+ New order', 'newOrder', undefined, { cls: 'primary' })}`)
+    + ordersBoard()
     + `<div class="kpi-grid k4 mb">${kpi('Orders shown', list.length.toLocaleString('en-US'), `of ${Repo.all('orders').length.toLocaleString('en-US')} in the workspace`)}${kpi('Order value shown', m(sum(list, orderValue)), 'Not revenue until delivered')}${kpi('Recognized revenue', m(sum(list, o => calc(o).revenue)), 'From these orders')}${Session.seesCosts ? kpi('Contribution', m(sum(list, contributionOf)), 'Before company overhead') : ''}</div>`
     + `<section class="card">${chips}<div class="filters">${search('orders.q', 'Search order, name, phone, SKU…', 'orders')}${dateF('orders.from', 'From', 'orders')}${dateF('orders.to', 'To', 'orders')}${sel('orders.status', 'Order status', [['', 'All'], ...ORDER_STATUSES], 'orders')}${sel('orders.delivery', 'Delivery status', [['', 'All'], 'Unassigned', ...DELIVERY_STATUSES], 'orders')}${sel('orders.collection', 'Collection', [['', 'All'], ...COLLECTION_OUTCOMES], 'orders')}${sel('orders.channel', 'Channel', [['', 'All'], ...CHANNELS], 'orders')}${sel('orders.source', 'Entry method', [['', 'All'], 'Manual', 'CSV'], 'orders')}${sel('orders.campaign', 'Campaign', campaignOptions(), 'orders')}${sel('orders.method', 'Fulfillment', [['', 'All'], ['courier', 'External courier'], ['driver', 'Private delivery'], ['store', 'In-store sale']], 'orders')}${sel('orders.courier', 'Courier', courierOptions(), 'orders')}${sel('orders.driver', 'Private driver', driverOptions(), 'orders')}${sel('orders.exception', 'Exception', [['', 'All'], ...FLAG_LIST], 'orders')}${hasF ? btn('Clear', 'clearOrders', undefined, { cls: 'ghost' }) : ''}</div>
     <div class="bulk"><strong>${selN} selected</strong>${btn('Confirm', 'bulkConfirm', undefined, { why: need })}${btn('Mark ready', 'bulkReady', undefined, { why: need })}${btn('Ship', 'bulkShip', undefined, { why: need })}${btn('Record pickup', 'bulkPickup', undefined, { why: need })}${btn('Print', 'bulkPrint', undefined, { why: need })}${selN ? btn('Clear selection', 'clearSelection', undefined, { cls: 'ghost' }) : ''}<span class="muted small">Invalid orders are skipped and reported individually.</span></div>
