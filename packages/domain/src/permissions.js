@@ -1,8 +1,8 @@
 /* Who may run each command, and who may open each screen. The server enforces
    COMMAND_ROLES on every request. The web app reads the same table to hide what
    a user can't do, so the two can never disagree. */
-export const ROLES = ['owner', 'operations', 'warehouse', 'finance', 'driver'];
-const OPS = 'operations', WH = 'warehouse', FIN = 'finance', DRV = 'driver';
+export const ROLES = ['owner', 'operations', 'warehouse', 'finance', 'driver', 'employee'];
+const OPS = 'operations', WH = 'warehouse', FIN = 'finance', DRV = 'driver', EMP = 'employee';
 export const COMMAND_ROLES = {
   createOrder: [OPS], createOrderWithCustomer: [OPS], importOrders: [OPS], addOrderNote: [OPS, WH, FIN], confirmOrder: [OPS], advanceOrder: [OPS, WH], cancelOrder: [OPS],
   attribute: [FIN],
@@ -14,18 +14,19 @@ export const COMMAND_ROLES = {
   saveCampaign: [FIN], addSpend: [FIN], addExpense: [FIN], removeExpense: [FIN],
   saveDriver: [OPS], setAvailability: [OPS], saveCourier: [], saveSettings: [], setRoadmap: [],
   closePeriod: [FIN], reopenPeriod: [],
-  saveEmployee: [OPS], recordAttendance: [OPS], recordAttendanceDay: [OPS], removeAttendance: [OPS],
+  saveEmployee: [OPS], requestLeave: [OPS, EMP], decideLeave: [OPS], recordAttendance: [OPS], recordAttendanceDay: [OPS], removeAttendance: [OPS],
 };
 /* The owner may run everything in the table. Anything not in the table can't be called at all. */
 export const canRun = (role, command) => Object.hasOwn(COMMAND_ROLES, command) && (role === 'owner' || COMMAND_ROLES[command].includes(role));
 /* Commands a driver may run, and how to find the driver they must belong to. */
 export const DRIVER_SCOPE = { setDeliveryStatus: 'delivery', deliver: 'delivery', collect: 'delivery', startReturn: 'delivery', addDriverExpense: 'driverField' };
 export const ROLE_SCREENS = {
-  owner: ['overview', 'orders', 'order360', 'crm', 'products', 'inventory', 'shipping', 'driver', 'finance', 'campaigns', 'staff', 'settings', 'roadmap'],
-  operations: ['overview', 'orders', 'order360', 'crm', 'products', 'inventory', 'shipping', 'driver', 'staff'],
+  owner: ['performance', 'overview', 'orders', 'order360', 'crm', 'products', 'inventory', 'shipping', 'driver', 'finance', 'campaigns', 'staff', 'settings', 'roadmap'],
+  operations: ['performance', 'overview', 'orders', 'order360', 'crm', 'products', 'inventory', 'shipping', 'driver', 'staff'],
   warehouse: ['orders', 'order360', 'products', 'inventory', 'shipping', 'driver'],
-  finance: ['overview', 'orders', 'order360', 'crm', 'products', 'driver', 'shipping', 'finance', 'campaigns', 'staff'],
+  finance: ['performance', 'overview', 'orders', 'order360', 'crm', 'products', 'driver', 'shipping', 'finance', 'campaigns', 'staff'],
   driver: ['driver'],
+  employee: ['staff'],
 };
 
 /* What each role may read. The server removes everything else before data leaves
@@ -37,7 +38,7 @@ export const ROLE_SCREENS = {
 export const COST_ROLES = ['owner', 'finance'];
 export const seesCosts = role => COST_ROLES.includes(role);
 const COST_FIELDS = { lines: ['unitCost'], materials: ['cost'], boms: ['labor', 'overhead', 'buyCost'], production: ['unitCost'], campaigns: ['budget', 'reportedRoas'] };
-const HIDDEN_TABLES = { operations: ['spend', 'expenses'], warehouse: ['spend', 'expenses', 'contacts', 'employees', 'attendance'], driver: ['spend', 'expenses', 'contacts', 'settlements', 'settlementAllocs', 'campaigns', 'materials', 'boms', 'production', 'movements', 'couriers', 'employees', 'attendance'] };
+const HIDDEN_TABLES = { operations: ['spend', 'expenses'], warehouse: ['spend', 'expenses', 'contacts', 'employees', 'attendance', 'leaveRequests'], driver: ['spend', 'expenses', 'contacts', 'settlements', 'settlementAllocs', 'campaigns', 'materials', 'boms', 'production', 'movements', 'couriers', 'employees', 'attendance', 'leaveRequests'] };
 export const canReadTable = (role, table) => !(HIDDEN_TABLES[role] || []).includes(table);
 /* Returns the row as this role may see it, or null when the role may not see it at all. */
 export function redactRow(role, table, row) {

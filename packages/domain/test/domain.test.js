@@ -233,3 +233,25 @@ test('board shipping: one-step delivered and returned, per-order commission kept
   throws(() => Commands.recordHandover({ driverId: drv, ref: 'T-HO-3', receivedBy: 'T', allocations: [{ deliveryId: da.id, commission: 10 }] }), /more than/);
   assert.deepEqual(integrity().filter(x => !x.ok), []);
 });
+
+test('leave: days skip weekly days off, annual balance, approval and planned days', async () => {
+  const { leaveBalance, plannedStatus } = await import('../src/index.js');
+  buildSeedWorkspace();
+  const throws = (fn, re) => assert.throws(fn, e => e instanceof Rule && (!re || re.test(e.message)), String(re));
+  const id = Commands.saveEmployee({ name: 'Leave Test', weeklyOff: [5], annualLeave: 5, nationalId: '29001011234567', hireDate: '2025-01-01' });
+  throws(() => Commands.saveEmployee({ name: 'Bad ID', nationalId: '123' }), /14 digits/);
+  const e = () => Repo.get('employees', id);
+  /* 2027-03-04 (Thu) to 2027-03-08 (Mon) is 5 dates; Friday is the weekly day off, so 4 days. */
+  const a = Commands.requestLeave({ employeeId: id, from: '2027-03-04', to: '2027-03-08', type: 'Annual' });
+  assert.equal(Repo.get('leaveRequests', a).days, 4);
+  throws(() => Commands.requestLeave({ employeeId: id, from: '2027-03-08', to: '2027-03-09', type: 'Sick' }), /overlaps/);
+  throws(() => Commands.requestLeave({ employeeId: id, from: '2027-04-01', to: '2027-04-04', type: 'Annual' }), /Only 1 annual leave day left/);
+  assert.equal(leaveBalance(e(), '2027'), 5, 'pending leave is not used yet');
+  Commands.decideLeave(a, 'Approved');
+  assert.equal(leaveBalance(e(), '2027'), 1);
+  throws(() => Commands.decideLeave(a, 'Rejected'), /already approved/);
+  assert.equal(plannedStatus(e(), '2027-03-05'), 'Leave');
+  assert.equal(plannedStatus(e(), '2027-03-12'), 'Day off', 'a Friday');
+  assert.equal(plannedStatus(e(), '2027-03-11'), null);
+  assert.deepEqual(integrity().filter(x => !x.ok), []);
+});

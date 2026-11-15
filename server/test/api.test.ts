@@ -29,9 +29,9 @@ before(async () => {
   await withTx(c => replaceAll(c, seed, 1));
   await full();
   const h = await hashPassword(PW);
-  for (const [e, r, d] of [['owner', 'owner', null], ['ops', 'operations', null], ['wh', 'warehouse', null], ['fin', 'finance', null], ['drv', 'driver', 'DRV-1'], ['drv3', 'driver', 'DRV-3']]) await pool.query('INSERT INTO users (email,name,password_hash,role,driver_id) VALUES ($1,$2,$3,$4,$5)', [`${e}@t.test`, `T ${e}`, h, r, d]);
+  for (const [e, r, d] of [['owner', 'owner', null], ['ops', 'operations', null], ['wh', 'warehouse', null], ['fin', 'finance', null], ['drv', 'driver', 'DRV-1'], ['drv3', 'driver', 'DRV-3'], ['emp', 'employee', 'EMP-1']]) await pool.query('INSERT INTO users (email,name,password_hash,role,driver_id,employee_id) VALUES ($1,$2,$3,$4,$5,$6)', [`${e}@t.test`, `T ${e}`, h, r, r === 'driver' ? d : null, r === 'employee' ? d : null]);
   app = await buildApp();
-  for (const u of ['owner', 'ops', 'wh', 'fin', 'drv', 'drv3']) {
+  for (const u of ['owner', 'ops', 'wh', 'fin', 'drv', 'drv3', 'emp']) {
     const r = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: `${u}@t.test`, password: PW } });
     assert.equal(r.statusCode, 200); cookies[u] = String(r.headers['set-cookie']).split(';')[0];
   }
@@ -352,6 +352,31 @@ test('a backup from before a column was added still restores', async () => {
   old.tables.boms = old.tables.boms.map(({ buyCost, ...b }: any) => b); old.tables.campaigns = old.tables.campaigns.map(({ closed, ...c }: any) => c);
   assert.equal((await call('owner', 'POST', '/api/admin/restore', old)).status, 200);
   const r = (await loadAll())!.data; assert.equal(Number(r.tables.boms[0].buyCost), 0); assert.equal(r.tables.campaigns[0].closed, false);
+});
+test('an employee sees only their own page and asks only for their own leave', async () => {
+  const snap = (await call('emp', 'GET', '/api/snapshot/mine')).json();
+  assert.deepEqual(snap.tables.employees.map((e: any) => e.id), ['EMP-1']);
+  assert.equal(snap.tables.orders.length, 0); assert.equal(snap.tables.customers.length, 0);
+  assert.ok(snap.tables.attendance.every((a: any) => a.employeeId === 'EMP-1'));
+  assert.equal((await call('emp', 'GET', '/api/snapshot')).status, 403, 'no full workspace');
+  assert.equal((await cmd('emp', 'createOrder', { customerId: 'C-0001', lines: [{ sku: 'TEE-IVR', qty: 1 }], channel: 'Phone' })).status, 403);
+  assert.equal((await cmd('emp', 'requestLeave', { employeeId: 'EMP-2', from: '2027-03-01', to: '2027-03-02', type: 'Annual' })).status, 403, 'not for someone else');
+  const r = await cmd('emp', 'requestLeave', { employeeId: 'EMP-1', from: '2027-03-01', to: '2027-03-03', type: 'Annual', reason: 'Family visit' });
+  assert.equal(r.status, 200, r.body);
+  assert.equal((await cmd('emp', 'decideLeave', r.json().result, 'Approved')).status, 403, 'cannot approve own leave');
+  assert.equal((await cmd('ops', 'decideLeave', r.json().result, 'Approved')).status, 200);
+  assert.equal((await call('emp', 'GET', '/api/employees/EMP-1/files')).status, 403, 'documents are owner only');
+});
+test('employee documents: owner uploads, views and removes; type and size are checked', async () => {
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').toString('base64');
+  assert.equal((await call('owner', 'POST', '/api/employees/EMP-1/files', { kind: 'ID', name: 'id.png', mime: 'image/png', data: png })).status, 201);
+  assert.equal((await call('owner', 'POST', '/api/employees/EMP-1/files', { kind: 'ID', name: 'x.svg', mime: 'image/svg+xml', data: png })).status, 422, 'no SVG');
+  assert.equal((await call('ops', 'POST', '/api/employees/EMP-1/files', { kind: 'ID', name: 'id.png', mime: 'image/png', data: png })).status, 403);
+  const files = (await call('owner', 'GET', '/api/employees/EMP-1/files')).json().files; assert.equal(files.length, 1);
+  const f = await call('owner', 'GET', `/api/files/${files[0].id}`); assert.equal(f.status, 200); assert.equal(f.headers['content-type'], 'image/png');
+  assert.equal((await call('ops', 'GET', `/api/files/${files[0].id}`)).status, 403);
+  assert.equal((await call('owner', 'DELETE', `/api/files/${files[0].id}`)).status, 200);
+  assert.equal((await call('owner', 'GET', '/api/employees/EMP-1/files')).json().files.length, 0);
 });
 test('login attempts are rate limited', async () => {
   let last = 0; for (let i = 0; i < 12; i++) last = (await call(null, 'POST', '/api/auth/login', { email: 'z@t.test', password: 'wrong-password' })).status;

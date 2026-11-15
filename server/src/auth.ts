@@ -15,8 +15,8 @@ export async function createSession(userId: number) {
 }
 export async function userFromToken(token?: string): Promise<User | null> {
   if (!token) return null;
-  const r = await pool.query(`SELECT u.id, u.email, u.name, u.role, u.driver_id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash=$1 AND s.expires_at > now() AND u.active`, [hashToken(token)]);
-  const u = r.rows[0]; return u ? { id: Number(u.id), email: u.email, name: u.name, role: u.role, driverId: u.driver_id } : null;
+  const r = await pool.query(`SELECT u.id, u.email, u.name, u.role, u.driver_id, u.employee_id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash=$1 AND s.expires_at > now() AND u.active`, [hashToken(token)]);
+  const u = r.rows[0]; return u ? { id: Number(u.id), email: u.email, name: u.name, role: u.role, driverId: u.driver_id, employeeId: u.employee_id } : null;
 }
 export const destroySession = (token: string) => pool.query('DELETE FROM sessions WHERE token_hash=$1', [hashToken(token)]);
 export const destroyUserSessions = (id: number) => pool.query('DELETE FROM sessions WHERE user_id=$1', [id]);

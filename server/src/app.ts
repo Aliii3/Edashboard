@@ -9,7 +9,7 @@ import { Rule, ROLES } from '@commerce-os/domain';
 import { pool, ensureColumns, migrateDb, describeDbError } from './db.ts';
 import { COOKIE, SESSION_DAYS, createSession, destroySession, destroyUserSessions, userFromToken, hashPassword, checkPassword, validPassword, dummyHash, tooManyAttempts, recordFailure, ensureAdmin, ensureDemoLogins } from './auth.ts';
 import { Forbidden, runCommand, resetDemo, loadTest, restore, ensureWorkspace, startTestMode, endTestMode, testModeSince, type User } from './store.ts';
-import { version, snapshotPage, snapshotBatch, driverSnapshot, changesSince, backupChunks, redactDelta } from './reads.ts';
+import { version, snapshotPage, snapshotBatch, driverSnapshot, employeeSnapshot, changesSince, backupChunks, redactDelta } from './reads.ts';
 
 declare module 'fastify' { interface FastifyRequest { user: User | null } }
 /* Demo data tools: on outside production, or when DEMO_TOOLS=1 (for example on a preview deployment). */
@@ -47,7 +47,7 @@ export async function buildApp({ serveStatic = false } = {}) {
     return reply.code(500).send({ error: 'Something went wrong. No changes were saved.' });
   });
   const auth = async (req: FastifyRequest, reply: FastifyReply) => { req.user = await userFromToken(req.cookies[COOKIE]); if (!req.user) return reply.code(401).send({ error: 'Please sign in.' }); };
-  const staff = async (req: FastifyRequest, reply: FastifyReply) => { await auth(req, reply); if (!reply.sent && req.user!.role === 'driver') return reply.code(403).send({ error: 'Not available to drivers.' }); };
+  const staff = async (req: FastifyRequest, reply: FastifyReply) => { await auth(req, reply); if (!reply.sent && (req.user!.role === 'driver' || req.user!.role === 'employee')) return reply.code(403).send({ error: 'Not available to drivers.' }); };
   const owner = async (req: FastifyRequest, reply: FastifyReply) => { await auth(req, reply); if (!reply.sent && req.user!.role !== 'owner') return reply.code(403).send({ error: 'Owner access required.' }); };
   const demoOnly = async (_: FastifyRequest, reply: FastifyReply) => { if (!demoTools()) return reply.code(404).send({ error: 'Demo tools are turned off.' }); };
   const secure = process.env.COOKIE_SECURE === '1' || !!process.env.VERCEL;
@@ -103,42 +103,64 @@ export async function buildApp({ serveStatic = false } = {}) {
     const body = await snapshotBatch(req.user!, req.query.t || undefined, Number(req.query.after) || 0);
     return body === null ? reply.code(400).send({ error: 'Unknown table.' }) : reply.type('application/json').send(body);
   });
-  app.get('/api/snapshot/mine', { preHandler: auth }, async (req, reply) => req.user!.role === 'driver' ? driverSnapshot(req.user!) : reply.code(400).send({ error: 'Staff load the workspace with /api/snapshot.' }));
+  app.get('/api/snapshot/mine', { preHandler: auth }, async (req, reply) => req.user!.role === 'driver' ? driverSnapshot(req.user!) : req.user!.role === 'employee' ? employeeSnapshot(req.user!) : reply.code(400).send({ error: 'Staff load the workspace with /api/snapshot.' }));
   app.get<{ Querystring: { since?: string } }>('/api/changes', { preHandler: auth }, async req => changesSince(Number(req.query.since) || 0, req.user!));
   app.post<{ Params: { name: string } }>('/api/commands/:name', { preHandler: auth }, async (req, reply) => {
     const { args } = (req.body || {}) as any;
     if (!Array.isArray(args)) return reply.code(400).send({ error: 'Invalid request.' });
     const { result, delta } = await runCommand(req.user!, req.params.name, args);
-    return req.user!.role === 'driver' ? { result, resync: true, v: delta.v } : { result, delta: redactDelta(req.user!, delta) };
+    return req.user!.role === 'driver' || req.user!.role === 'employee' ? { result, resync: true, v: delta.v } : { result, delta: redactDelta(req.user!, delta) };
   });
 
   /* Team */
-  const pub = `id, email, name, role, driver_id AS "driverId", active`;
-  const checkRole = async (role: unknown, driverId: unknown) => {
+  const pub = `id, email, name, role, driver_id AS "driverId", employee_id AS "employeeId", active`;
+  const checkRole = async (role: unknown, driverId: unknown, employeeId?: unknown) => {
     if (!ROLES.includes(role as string)) throw new Rule('Choose a valid role.');
+    if (role === 'employee' && !(await pool.query('SELECT 1 FROM employees WHERE id=$1', [employeeId])).rowCount) throw new Rule('Link this login to an employee.');
     if (role === 'driver' && !(await pool.query('SELECT 1 FROM drivers WHERE id=$1', [driverId])).rowCount) throw new Rule('Link this login to a driver record.');
   };
-  app.get('/api/users', { preHandler: owner }, async () => ({ users: (await pool.query(`SELECT ${pub} FROM users ORDER BY id`)).rows, drivers: (await pool.query('SELECT id, name FROM drivers ORDER BY "_seq"')).rows }));
+  app.get('/api/users', { preHandler: owner }, async () => ({ users: (await pool.query(`SELECT ${pub} FROM users ORDER BY id`)).rows, drivers: (await pool.query('SELECT id, name FROM drivers ORDER BY "_seq"')).rows, employees: (await pool.query('SELECT id, name FROM employees ORDER BY "_seq"')).rows }));
   app.post('/api/users', { preHandler: owner }, async (req, reply) => {
-    const { email, name, role, driverId, password } = (req.body || {}) as any;
+    const { email, name, role, driverId, employeeId, password } = (req.body || {}) as any;
     if (typeof email !== 'string' || !/^\S+@\S+\.\S+$/.test(email)) throw new Rule('Enter a valid email.');
     if (typeof name !== 'string' || !name.trim()) throw new Rule('Enter a name.');
     if (!validPassword(password)) throw new Rule('Use a password of at least 10 characters.');
-    await checkRole(role, driverId);
-    const r = await pool.query(`INSERT INTO users (email, name, password_hash, role, driver_id) VALUES ($1,$2,$3,$4,$5) RETURNING ${pub}`, [email.trim().toLowerCase(), name.trim(), await hashPassword(password), role, role === 'driver' ? driverId : null]);
+    await checkRole(role, driverId, employeeId);
+    const r = await pool.query(`INSERT INTO users (email, name, password_hash, role, driver_id, employee_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${pub}`, [email.trim().toLowerCase(), name.trim(), await hashPassword(password), role, role === 'driver' ? driverId : null, role === 'employee' ? employeeId : null]);
     return reply.code(201).send({ user: r.rows[0] });
   });
   app.patch<{ Params: { id: string } }>('/api/users/:id', { preHandler: owner }, async req => {
-    const id = Number(req.params.id), { name, role, driverId, active, password } = (req.body || {}) as any;
+    const id = Number(req.params.id), { name, role, driverId, employeeId, active, password } = (req.body || {}) as any;
     const cur = (await pool.query('SELECT * FROM users WHERE id=$1', [id])).rows[0]; if (!cur) throw new Rule('User not found.');
-    const nextRole = role ?? cur.role, nextDriver = nextRole === 'driver' ? (driverId ?? cur.driver_id) : null, nextActive = active ?? cur.active;
-    await checkRole(nextRole, nextDriver);
+    const nextRole = role ?? cur.role, nextDriver = nextRole === 'driver' ? (driverId ?? cur.driver_id) : null, nextEmp = nextRole === 'employee' ? (employeeId ?? cur.employee_id) : null, nextActive = active ?? cur.active;
+    await checkRole(nextRole, nextDriver, nextEmp);
     if (cur.role === 'owner' && (nextRole !== 'owner' || !nextActive)) { const n = (await pool.query(`SELECT count(*)::int AS n FROM users WHERE role='owner' AND active`)).rows[0].n; if (n <= 1) throw new Rule('There must always be one active owner.'); }
     if (password !== undefined && !validPassword(password)) throw new Rule('Use a password of at least 10 characters.');
-    const r = await pool.query(`UPDATE users SET name=$1, role=$2, driver_id=$3, active=$4, password_hash=COALESCE($5,password_hash) WHERE id=$6 RETURNING ${pub}`, [name ?? cur.name, nextRole, nextDriver, nextActive, password ? await hashPassword(password) : null, id]);
-    if (!nextActive || password || nextRole !== cur.role) await destroyUserSessions(id);
+    const r = await pool.query(`UPDATE users SET name=$1, role=$2, driver_id=$3, employee_id=$7, active=$4, password_hash=COALESCE($5,password_hash) WHERE id=$6 RETURNING ${pub}`, [name ?? cur.name, nextRole, nextDriver, nextActive, password ? await hashPassword(password) : null, id, nextEmp]);
+    if (!nextActive || password || nextRole !== cur.role || nextEmp !== cur.employee_id) await destroyUserSessions(id);
     return { user: r.rows[0] };
   });
+
+  /* Employee documents (ID card and others). Owner only: they hold personal data. */
+  const FILE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
+  app.get<{ Params: { id: string } }>('/api/employees/:id/files', { preHandler: owner }, async req => ({ files: (await pool.query('SELECT id, kind, name, mime, size, at, "by" FROM employee_files WHERE employee_id=$1 ORDER BY id', [req.params.id])).rows }));
+  app.post<{ Params: { id: string } }>('/api/employees/:id/files', { preHandler: owner }, async (req, reply) => {
+    const { kind, name, mime, data } = (req.body || {}) as any;
+    if (!['ID', 'Document'].includes(kind)) throw new Rule('Choose ID card or other document.');
+    if (!FILE_TYPES.has(mime)) throw new Rule('Upload a photo (JPG, PNG or WebP) or a PDF.');
+    const buf = typeof data === 'string' ? Buffer.from(data, 'base64') : null;
+    if (!buf?.length) throw new Rule('Choose a file.');
+    if (buf.length > 2.5e6) throw new Rule('Files must be under 2.5 MB. Take the photo at a lower size and try again.');
+    if (!(await pool.query('SELECT 1 FROM employees WHERE id=$1', [req.params.id])).rowCount) throw new Rule('Unknown employee.');
+    const r = await pool.query('INSERT INTO employee_files (employee_id, kind, name, mime, size, data, "by") VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id', [req.params.id, kind, String(name || 'file').slice(0, 120), mime, buf.length, buf, req.user!.name]);
+    return reply.code(201).send({ id: Number(r.rows[0].id) });
+  });
+  app.get<{ Params: { id: string } }>('/api/files/:id', { preHandler: owner }, async (req, reply) => {
+    const f = (await pool.query('SELECT name, mime, data FROM employee_files WHERE id=$1', [Number(req.params.id) || 0])).rows[0];
+    if (!f) return reply.code(404).send({ error: 'File not found.' });
+    return reply.type(f.mime).header('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`).header('Cache-Control', 'private, no-store').send(f.data);
+  });
+  app.delete<{ Params: { id: string } }>('/api/files/:id', { preHandler: owner }, async req => { await pool.query('DELETE FROM employee_files WHERE id=$1', [Number(req.params.id) || 0]); return { ok: true }; });
 
   /* Workspace data */
   app.get('/api/admin/backup', { preHandler: owner }, async (_req, reply) => reply.type('application/json').header('Content-Disposition', `attachment; filename="commerce-os-backup-${new Date().toISOString().slice(0, 10)}.json"`).send(Readable.from(backupChunks())));

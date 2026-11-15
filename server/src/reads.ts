@@ -86,13 +86,24 @@ export async function driverSnapshot(user: User) {
     return { version: Number(w.version), schema: w.schema, seq: {}, settings: redactSettings('driver', w.settings), roadmap: {}, tables };
   }, 'REPEATABLE READ');
 }
+/* An employee receives only their own record, attendance and leave requests. */
+export async function employeeSnapshot(user: User) {
+  await ensureColumns();
+  return withTx(async c => {
+    const w = await readWorkspace(c), tables: Record<string, any[]> = Object.fromEntries(TABLES.map(t => [t, []]));
+    tables.employees = await selectRows(c, 'employees', 'id=$1', [user.employeeId]);
+    tables.attendance = await selectRows(c, 'attendance', 'employee_id=$1', [user.employeeId]);
+    tables.leaveRequests = await selectRows(c, 'leaveRequests', 'employee_id=$1', [user.employeeId]);
+    return { version: Number(w.version), schema: w.schema, seq: {}, settings: { company: w.settings.company, currency: w.settings.currency, timezone: w.settings.timezone }, roadmap: {}, tables };
+  }, 'REPEATABLE READ');
+}
 /* Everything that changed after `since`, read from one consistent view of the database. */
 export async function changesSince(since: number, user: User) {
   await ensureColumns();
   return withTx(async (c: Client) => {
     const w = await readWorkspace(c), v = Number(w.version);
     if (since >= v) return { v, changes: [] };
-    if (user.role === 'driver') return { v, resync: true };
+    if (user.role === 'driver' || user.role === 'employee') return { v, resync: true };
     if (since < Number(w.changes_floor)) return { v, resync: true };
     const log = (await c.query('SELECT version, t, row_id, op FROM changes WHERE version > $1 AND version <= $2 ORDER BY version, ord', [since, v])).rows;
     if (log.length > 20000 || log.some(r => r.op === 'resync')) return { v, resync: true };

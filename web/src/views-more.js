@@ -1,9 +1,10 @@
 import { Session } from './api.js';
 import { isAr } from './i18n.js';
 import { Repo, esc, round2, sum } from '@commerce-os/domain';
-import { ATTENDANCE_STATUSES, S, availableOf, bomCost, customerOf, dateKey, lateMinutes, netUnit, orderOf, productStats, reservedOf, stockOnHand } from '@commerce-os/domain';
-import { act, badge, btn, card, custA, dayShift, fd, fdt, grid, heading, kpi, lineChart, m, note, orderA, pad, row, search, simpleTable, tabs, today, ui } from './ui-kit.js';
+import { carrierCharge, carrierKey, driverCash, leaveBalance, plannedStatus, ATTENDANCE_STATUSES, S, availableOf, bomCost, customerOf, dateKey, lateMinutes, netUnit, orderOf, productStats, reservedOf, stockOnHand } from '@commerce-os/domain';
+import { PRESETS, dateF, presetRange, rangeLabel, sel, act, badge, btn, card, custA, dayShift, fd, fdt, grid, heading, kpi, lineChart, m, note, orderA, pad, row, search, simpleTable, tabs, today, ui } from './ui-kit.js';
 import { materialsCard, skuHealth } from './views-ops.js';
+import { A } from './actions.js';
 /* ==========================================================================
    LAYER 5 · VIEWS: Products (a profile per product, like customers) and
    Staff (daily attendance, the monthly sheet and employee profiles).
@@ -94,7 +95,7 @@ function monthCounts(empId, mo) {
 }
 function staffView() {
   if (ui.route.id) return employeeProfile(ui.route.id);
-  const body = { 'Today': attendanceDay, 'Monthly sheet': attendanceMonth, 'Employees': employeesList };
+  const body = { 'Today': attendanceDay, 'Monthly sheet': attendanceMonth, 'Employees': employeesList, 'Leave requests': leaveList };
   if (!body[ui.staff.tab]) ui.staff.tab = 'Today';
   return heading('Staff and attendance', 'Who came in, who was late or absent, and the monthly sheet. Recorded by hand, nothing is tracked automatically.', btn('+ Employee', 'employeeModal', undefined, { cls: 'primary' }))
     + tabs('staff.tab', Object.keys(body)) + body[ui.staff.tab]();
@@ -109,14 +110,14 @@ function attendanceDay() {
     + `<div class="kpi-grid k4 mb">${kpi('Present', n('Present'), `${n('Late')} late`)}${kpi('Absent', n('Absent'), 'Without leave')}${kpi('Leave or day off', n('Leave') + n('Day off'), `${n('Leave')} on leave`)}${kpi('Not recorded yet', none, `of ${es.length} employees`, { cls: none ? 'hl' : '' })}</div>`
     + (es.length ? '' : note('Add your employees first with <strong>+ Employee</strong>. Then mark attendance here each day.'))
     + card(isToday ? 'Today' : `Attendance for ${fd(date + 'T12:00:00Z')}`, grid('att', es, [
-      { k: 'n', label: 'Employee', sort: e => e.name, render: e => `<a class="link" href="#/staff/${esc(e.id)}">${esc(e.name)}</a><br><small>${esc(e.jobTitle || '')}</small>` },
+      { k: 'n', label: 'Employee', sort: e => e.name, render: e => { const p = !attOf(e.id, date) && plannedStatus(e, date); return `<a class="link" href="#/staff/${esc(e.id)}">${esc(e.name)}</a>${p ? ` <span class="flag">${esc(p)}</span>` : ''}<br><small>${esc(e.jobTitle || '')}</small>`; } },
       { k: 'sh', label: 'Shift starts', render: e => esc(e.shiftStart || '—') },
       { k: 's', label: 'Status', render: statusBtns },
       { k: 'i', label: 'Check in', render: e => time(e, 'checkIn') },
       { k: 'o', label: 'Check out', render: e => { const r = attOf(e.id, date); return time(e, 'checkOut') + (isToday && can && r && isWork(r.status) && !r.checkOut ? ` ${btn('Now', 'attNow', [e.id], { cls: 'small' })}` : ''); } },
       { k: 'l', label: 'Late by', num: true, render: e => { const r = attOf(e.id, date), x = r && isWork(r.status) ? lateMinutes(r) : 0; return x ? `<span class="negative">${x} min</span>` : '<span class="muted">—</span>'; } },
       { k: 'x', label: '', render: e => { const r = attOf(e.id, date); return btn('Note', 'attendanceModal', [e.id, date], { cls: 'small' }) + (r ? btn('Clear', 'attRemove', r.id, { cls: 'small ghost' }) : ''); } },
-    ], { sort: 'n', dir: 1, size: 50, empty: 'No employees yet.' }), 'Tap a status to save it. Present keeps the shift start as the check-in time unless they came earlier. Late records the time now.', btn('Mark everyone not recorded as present', 'attAllPresent', undefined, { why: none ? '' : 'Everyone already has attendance for this day.' }));
+    ], { sort: 'n', dir: 1, size: 50, empty: 'No employees yet.' }), 'Tap a status to save it. Mark everyone not recorded puts approved leave and weekly days off in for you, and everyone else as present.', btn('Mark everyone not recorded', 'attAllPresent', undefined, { why: none ? '' : 'Everyone already has attendance for this day.' }));
 }
 function attendanceMonth() {
   const mo = ui.staff.month || today().slice(0, 7), [y, mm] = mo.split('-').map(Number), days = new Date(Date.UTC(y, mm, 0)).getUTCDate(), t = today();
@@ -142,15 +143,27 @@ function employeesList() {
     { k: 'x', label: '', render: e => btn('Edit', 'employeeModal', e.id, { cls: 'small' }) },
   ], { sort: 'n', dir: 1, empty: 'No employees yet. Add one with + Employee.' })}</section>`;
 }
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const leaveRows = (list, withName) => list.sort((a, b) => b.from.localeCompare(a.from)).map(x => `<div class="row"><span>${withName ? `<a class="link" href="#/staff/${esc(x.employeeId)}">${esc(Repo.get('employees', x.employeeId)?.name || x.employeeId)}</a> · ` : ''}${esc(fd(x.from + 'T12:00:00Z'))} → ${esc(fd(x.to + 'T12:00:00Z'))}<br><small><span>${esc(x.type)}</span> · ${x.days} <span>${x.days === 1 ? 'day' : 'days'}</span>${x.reason ? ` · ${esc(x.reason)}` : ''}</small></span><span class="actions">${badge(x.status)}${x.status === 'Pending' ? btn('Approve', 'decideLeave', [x.id, 'Approved'], { cls: 'small primary' }) + btn('Reject', 'decideLeave', [x.id, 'Rejected'], { cls: 'small' }) : ''}</span></div>`).join('');
+function leaveList() {
+  const all = Repo.all('leaveRequests'), pending = all.filter(x => x.status === 'Pending');
+  return `<div class="grid cols">${card(`Waiting for a decision (${pending.length})`, pad(leaveRows(pending, true) || '<p class="empty">No leave requests waiting.</p>'))}${card('All leave', pad(leaveRows(all.filter(x => x.status !== 'Pending'), true) || '<p class="empty">No leave recorded yet.</p>'), 'Newest first')}</div>`;
+}
 function employeeProfile(id) {
   const e = Repo.get('employees', id); if (!e) return `<div class="card"><p class="empty">Employee not found. <a class="link" href="#/staff">Back to staff</a></p></div>`;
   const mo = ui.staff.month || today().slice(0, 7), c = monthCounts(id, mo), recs = Repo.by('attendance', 'employeeId', id).sort((a, b) => b.date.localeCompare(a.date));
   const worked = recs.filter(a => a.date.startsWith(mo) && isWork(a.status) && a.checkIn && a.checkOut), mins = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
-  const hours = round2(sum(worked, a => (mins(a.checkOut) - mins(a.checkIn)) / 60));
-  return heading(esc(e.name), `${esc(e.jobTitle || 'No job title')}${e.phone ? ` · ${esc(e.phone)}` : ''}${e.shiftStart ? ` · Shift starts ${esc(e.shiftStart)}` : ''}`, `${btn('Edit', 'employeeModal', id)}${btn('Record a day', 'attendanceModal', [id, today()], { cls: 'primary', why: e.active === false ? 'This employee is inactive.' : '' })}`, `<a href="#/staff">Staff</a> / ${esc(e.name)}`)
+  const hours = round2(sum(worked, a => (mins(a.checkOut) - mins(a.checkIn)) / 60)), y = today().slice(0, 4), leaves = Repo.by('leaveRequests', 'employeeId', id);
+  /* Documents: owner only, fetched from the server when the page opens. */
+  const owner = Session.user.role === 'owner'; if (owner && ui.empFiles?.id !== id) { ui.empFiles = { id, files: null }; A.loadEmpFiles(id); }
+  const files = owner && ui.empFiles?.id === id ? ui.empFiles.files : null;
+  const docs = !owner ? '' : card('ID card and documents', pad(files === null ? '<p class="empty">Loading…</p>' : (files.map(f => `<div class="row"><span><a class="link" href="/api/files/${f.id}" target="_blank" rel="noopener">${esc(f.name)}</a><br><small><span>${f.kind === 'ID' ? 'National ID card' : 'Other document'}</span> · ${Math.ceil(f.size / 1024)} KB · ${fd(f.at)}</small></span>${btn('Remove', 'removeEmpFile', [f.id, id], { cls: 'small ghost' })}</div>`).join('') || '<p class="empty">No documents yet.</p>')), 'Only the owner can see these', btn('+ Add document', 'empFileModal', id, { cls: 'small primary' }));
+  return heading(esc(e.name), `${esc(e.jobTitle || 'No job title')}${e.phone ? ` · ${esc(e.phone)}` : ''}${e.shiftStart ? ` · Shift starts ${esc(e.shiftStart)}` : ''}`, `${btn('Edit', 'employeeModal', id)}${btn('Record a day', 'attendanceModal', [id, today()], { cls: 'primary', why: e.active === false ? 'This employee is inactive.' : '' })}`, Session.isEmployee ? '' : `<a href="#/staff">Staff</a> / ${esc(e.name)}`)
     + (e.active === false ? note('This employee is inactive. Their attendance history is kept.', 'warning') : '')
     + `<div class="filterbar"><button type="button" class="ghost" ${act('staffMonth', -1)} aria-label="Previous month">←</button><label class="fsel"><span>Month</span><input type="month" data-f="staff.month" value="${mo}" max="${today().slice(0, 7)}"></label><button type="button" class="ghost" ${act('staffMonth', 1)} aria-label="Next month" ${mo >= today().slice(0, 7) ? 'disabled' : ''}>→</button></div>`
-    + `<div class="kpi-grid k4 mb">${kpi('Days present', c.Present + c.Late, `${hours} hours with check-in and check-out`)}${kpi('Late days', c.Late, `${c.lateMin} minutes late in total`)}${kpi('Absent', c.Absent, 'Without leave', { cls: c.Absent ? 'hl' : '' })}${kpi('Leave and days off', c.Leave + c['Day off'], `${c.Leave} leave · ${c['Day off']} days off`)}</div>`
+    + `<div class="kpi-grid k4 mb">${kpi('Days present', c.Present + c.Late, `${hours} hours with check-in and check-out`)}${kpi('Late days', c.Late, `${c.lateMin} minutes late in total`)}${kpi('Absent', c.Absent, 'Without leave', { cls: c.Absent ? 'hl' : '' })}${kpi(`Annual leave left in ${y}`, leaveBalance(e, y), `of ${e.annualLeave ?? 21} days`)}</div>`
+    + `<div class="grid cols">${card('Leave', pad(leaveRows(leaves, false) || '<p class="empty">No leave requested yet.</p>'), 'Weekly days off are not counted', btn('+ Request leave', 'leaveModal', id, { cls: 'small primary', why: e.active === false ? 'This employee is inactive.' : '' }))}
+    ${card('Details', pad(`${row('Job title', esc(e.jobTitle || '—'))}${row('Mobile', esc(e.phone || '—'))}${row('National ID', esc(e.nationalId || '—'))}${row('Hire date', e.hireDate ? esc(fd(e.hireDate + 'T12:00:00Z')) : '—')}${row('Shift starts', esc(e.shiftStart || '—'))}${row('Weekly days off', (e.weeklyOff || []).map(d => `<span>${DAY_NAMES[d]}</span>`).join(', ') || '—')}${row('Annual leave', `${e.annualLeave ?? 21} <span>days a year</span>`)}${row('State', badge(e.active === false ? 'Inactive' : 'Active'))}${e.note ? `<p class="subtitle">${esc(e.note)}</p>` : ''}<p class="inlinehelp">Workspace time zone: ${esc(S().timezone)}.</p>`))}</div><div class="sp"></div>`
     + `<div class="grid cols">${card('Attendance history', grid(`emp-${id}`, recs, [
       { k: 'd', label: 'Day', sort: a => a.date, render: a => esc(fd(a.date + 'T12:00:00Z')) },
       { k: 's', label: 'Status', sort: a => a.status, render: a => badge(a.status) },
@@ -160,8 +173,48 @@ function employeeProfile(id) {
       { k: 'n', label: 'Note', wrap: true, render: a => esc(a.note || '') },
       { k: 'b', label: 'Recorded', render: a => `<small>${esc(a.by || '')}<br>${fdt(a.at)}</small>` },
       { k: 'x', label: '', render: a => btn('Edit', 'attendanceModal', [id, a.date], { cls: 'small' }) },
-    ], { sort: 'd', size: 31, empty: 'No attendance recorded yet.' }), 'Newest first')}
-    ${card('Details', pad(`${row('Job title', esc(e.jobTitle || '—'))}${row('Mobile', esc(e.phone || '—'))}${row('Shift starts', esc(e.shiftStart || '—'))}${row('State', badge(e.active === false ? 'Inactive' : 'Active'))}${e.note ? `<p class="subtitle">${esc(e.note)}</p>` : ''}<p class="inlinehelp">Workspace time zone: ${esc(S().timezone)}.</p>`))}</div>`;
+    ], { sort: 'd', size: 31, empty: 'No attendance recorded yet.' }), 'Newest first')}${docs}</div>`;
 }
 
-export { attendanceDay, attendanceMonth, employeeProfile, employeesList, productProfile, productsView, staffView };
+/* ---------- Performance: drivers, staff and products side by side for one period ---------- */
+function performanceView() {
+  const f = ui.perf, r = presetRange(f), inR = at => !!at && (!r.from || dateKey(at) >= r.from) && (!r.to || dateKey(at) <= r.to);
+  const pc = (a, b) => b ? `${Math.round(a / b * 100)}%` : '—';
+  const drivers = Repo.all('drivers').map(d => {
+    const ds = Repo.by('deliveries', 'carrierKey', carrierKey('driver', d.id)).filter(x => inR(x.pickedUpAt)), fin = ds.filter(x => x.completedAt || x.returnedAt), done = ds.filter(x => x.completedAt).length;
+    return { d, sent: ds.length, done, back: fin.length - done, closed: fin.length, commission: round2(sum(fin, carrierCharge)), held: driverCash(d.id).outstanding };
+  }).filter(x => x.sent);
+  const staff = Repo.all('employees').map(e => {
+    const as = Repo.by('attendance', 'employeeId', e.id).filter(a => (!r.from || a.date >= r.from) && (!r.to || a.date <= r.to)), n = s => as.filter(a => a.status === s).length;
+    return { e, present: n('Present') + n('Late'), late: n('Late'), absent: n('Absent'), off: n('Leave') + n('Day off'), lateMin: sum(as.filter(a => a.status === 'Late'), lateMinutes) };
+  }).filter(x => x.present + x.absent + x.off);
+  const prods = Repo.all('skus').map(s => ({ s, st: productStats(s.id, o => inR(o.at)) })).filter(x => x.st.delivered || x.st.ordered);
+  return heading('Performance', 'Drivers, staff and products compared for the same period.')
+    + `<div class="filterbar">${sel('perf.preset', 'Period', PRESETS)}${f.preset === 'custom' ? dateF('perf.from', 'From') + dateF('perf.to', 'To') : ''}<span class="muted small">${rangeLabel(r)}</span></div>`
+    + card('Drivers', grid('pf-d', drivers, [
+      { k: 'n', label: 'Driver', sort: x => x.d.name, render: x => `<a class="link" href="#/drivers/${esc(x.d.id)}">${esc(x.d.name)}</a>` },
+      { k: 's', label: 'Picked up', num: true, sort: x => x.sent, render: x => x.sent },
+      { k: 'd', label: 'Delivered', num: true, sort: x => x.done, render: x => x.done },
+      { k: 'b', label: 'Returned', num: true, sort: x => x.back, render: x => x.back },
+      { k: 'r', label: 'Success rate', num: true, sort: x => x.closed ? x.done / x.closed : -1, render: x => pc(x.done, x.closed) },
+      { k: 'c', label: 'Commission', num: true, sort: x => x.commission, render: x => m(x.commission) },
+      { k: 'h', label: 'Cash held now', num: true, sort: x => x.held, render: x => m(x.held) },
+    ], { sort: 'd', empty: 'No driver picked up parcels in this period.' }), 'Parcels picked up in the period')
+    + `<div class="sp"></div>` + card('Staff', grid('pf-s', staff, [
+      { k: 'n', label: 'Employee', sort: x => x.e.name, render: x => `<a class="link" href="#/staff/${esc(x.e.id)}">${esc(x.e.name)}</a><br><small>${esc(x.e.jobTitle || '')}</small>` },
+      { k: 'p', label: 'Days present', num: true, sort: x => x.present, render: x => x.present },
+      { k: 'l', label: 'Late days', num: true, sort: x => x.late, render: x => x.late },
+      { k: 'm', label: 'Late minutes', num: true, sort: x => x.lateMin, render: x => x.lateMin },
+      { k: 'a', label: 'Absent', num: true, sort: x => x.absent, render: x => x.absent ? `<span class="negative">${x.absent}</span>` : 0 },
+      { k: 'o', label: 'Leave and days off', num: true, sort: x => x.off, render: x => x.off },
+    ], { sort: 'p', empty: 'No attendance recorded in this period.' }), 'From the attendance sheet')
+    + `<div class="sp"></div>` + card('Products', grid('pf-p', prods, [
+      { k: 'n', label: 'Product', sort: x => x.s.name, render: x => `<a class="link" href="#/products/${esc(x.s.id)}">${esc(x.s.name)}</a><br><small>${esc(x.s.variant)} · ${esc(x.s.id)}</small>` },
+      { k: 'o', label: 'Units ordered', num: true, sort: x => x.st.ordered, render: x => x.st.ordered },
+      { k: 'k', label: 'Units kept', num: true, sort: x => x.st.kept, render: x => x.st.kept },
+      { k: 'r', label: 'Revenue', num: true, sort: x => x.st.revenue, render: x => m(x.st.revenue) },
+      { k: 'x', label: 'Return rate', num: true, sort: x => x.st.delivered ? x.st.returned / x.st.delivered : -1, render: x => pc(x.st.returned, x.st.delivered) },
+    ], { sort: 'r', empty: 'No orders for these products in this period.' }), 'Orders placed in the period');
+}
+
+export { performanceView, attendanceDay, attendanceMonth, employeeProfile, employeesList, productProfile, productsView, staffView };

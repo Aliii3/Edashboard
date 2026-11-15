@@ -38,7 +38,7 @@ export function scopeFor(name: string, a: any[]): Scope {
     case 'recordAttendance': return scope({ attendance: [attId(first(a))] });
     case 'recordAttendanceDay': return scope({ attendance: Array.isArray(a[1]) ? a[1].map((x: any) => attId(x, a[0])) : [] });
     case 'removeAttendance': return scope({ attendance: [a[0]] });
-    case 'saveEmployee': return scope();
+    case 'saveEmployee': case 'requestLeave': case 'decideLeave': return scope();
     case 'adjustStock': case 'createProduction': case 'receiveMaterial': case 'saveSku': case 'saveMaterial': case 'saveCampaign': case 'addExpense':
     case 'setAvailability': case 'saveCourier': case 'saveSettings': case 'setRoadmap': return scope();
     default: throw new Error(`No data scope defined for ${name}`);
@@ -54,7 +54,7 @@ export async function loadScope(c: Client, s: Scope) {
   const tables: Record<string, Map<any, any>> = {};
   const put = (t: string, rows: any[]) => { const m = tables[t] ??= new Map(); for (const r of rows) m.set(r.id, r); return rows; };
   const byIds = async (t: string, ids: any[]) => ids.length ? put(t, await selectRows(c, t, `id = ANY($1)`, [idParam(t, ids)])) : [];
-  for (const t of ['skus', 'boms', 'materials', 'couriers', 'drivers', 'campaigns', 'employees']) put(t, await selectRows(c, t, 'true'));
+  for (const t of ['skus', 'boms', 'materials', 'couriers', 'drivers', 'campaigns', 'employees', 'leaveRequests']) put(t, await selectRows(c, t, 'true'));
   const orderIds = new Set<number>(clean(s.orders).map(Number).filter(Number.isFinite)), driverIds = new Set<string>(clean(s.drivers).map(String));
   for (const d of await byIds('deliveries', clean(s.deliveries))) orderIds.add(d.orderId);
   for (const x of await byIds('cases', clean(s.cases))) orderIds.add(x.orderId);

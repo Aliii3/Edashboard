@@ -1032,9 +1032,47 @@ const Commands = {
       if (!name) fail('Enter the employee name.');
       if (phone && !/^01[0125]\d{8}$/.test(phone)) fail('Enter a valid Egyptian mobile number, or leave it empty.');
       if (shiftStart && !HHMM.test(shiftStart)) fail('Shift start is a time like 09:00.');
-      const row = { name, phone, jobTitle: String(f.jobTitle || '').trim().slice(0, 60), shiftStart, active: f.active !== false, note: String(f.note || '').trim().slice(0, 300) };
+      const nationalId = String(f.nationalId || '').replace(/\s/g, ''), hireDate = String(f.hireDate || '').trim() || null;
+      if (nationalId && !/^\d{14}$/.test(nationalId)) fail('A national ID number is 14 digits.');
+      if (hireDate && (!/^\d{4}-\d{2}-\d{2}$/.test(hireDate) || isNaN(new Date(hireDate + 'T12:00:00Z')))) fail('Choose a valid hire date.');
+      const weeklyOff = [...new Set((f.weeklyOff || []).map(Number))].filter(d => Number.isInteger(d) && d >= 0 && d <= 6).sort();
+      if (weeklyOff.length > 3) fail('Choose at most three weekly days off.');
+      const annualLeave = f.annualLeave === undefined || f.annualLeave === '' ? 21 : Number(f.annualLeave);
+      if (!Number.isInteger(annualLeave) || annualLeave < 0 || annualLeave > 60) fail('Annual leave is a whole number of days, 0 to 60.');
+      const row = { name, phone, jobTitle: String(f.jobTitle || '').trim().slice(0, 60), shiftStart, active: f.active !== false, note: String(f.note || '').trim().slice(0, 300), nationalId, hireDate, weeklyOff, annualLeave };
       if (f.id) { const e = Repo.get('employees', f.id); if (!e) fail('Unknown employee.'); Repo.update('employees', e, row); log(`Employee ${name} updated`, {}); return f.id; }
       const id = 'EMP-' + Repo.nextId('EMP', 1); Repo.insert('employees', { id, ...row, at: Clock.now() }); log(`Employee ${name} added`, {}); return id;
+    });
+  },
+  /* Leave: requested by the employee (or for them), then approved or rejected by the office.
+     Days count the dates in the range except the employee's weekly days off. */
+  requestLeave({ employeeId, from, to, type, reason }) {
+    return Repo.tx(() => {
+      const e = Repo.get('employees', employeeId); if (!e) fail('Unknown employee.');
+      if (e.active === false) fail(`${e.name} is inactive.`);
+      const ok = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') && !isNaN(new Date(d + 'T12:00:00Z'));
+      if (!ok(from) || !ok(to)) fail('Choose the first and last day of the leave.');
+      if (to < from) fail('The last day cannot be before the first day.');
+      if (from.slice(0, 4) !== to.slice(0, 4)) fail('Split leave that crosses into a new year into two requests.');
+      if (!LEAVE_TYPES.includes(type)) fail('Choose annual, sick or unpaid leave.');
+      const days = leaveDays(e, from, to); if (!days) fail('Those dates are all weekly days off.');
+      if (Repo.by('leaveRequests', 'employeeId', e.id).some(x => x.status !== 'Rejected' && x.from <= to && x.to >= from)) fail('This overlaps a leave request that is already pending or approved.');
+      if (type === 'Annual') { const left = leaveBalance(e, from.slice(0, 4), true); if (days > left) fail(`Only ${left} annual leave day${left === 1 ? '' : 's'} left for ${from.slice(0, 4)}, counting pending requests.`); }
+      const id = 'LV-' + Repo.nextId('LV', 1);
+      Repo.insert('leaveRequests', { id, employeeId: e.id, from, to, days, type, reason: String(reason || '').trim().slice(0, 300), status: 'Pending', at: Clock.now(), by: activityBy() });
+      log(`Leave requested: ${e.name}, ${days} day${days === 1 ? '' : 's'} ${type.toLowerCase()} from ${from} to ${to}`, {});
+      return id;
+    });
+  },
+  decideLeave(id, decision) {
+    return Repo.tx(() => {
+      const x = Repo.get('leaveRequests', id); if (!x) fail('That leave request no longer exists.');
+      if (!['Approved', 'Rejected'].includes(decision)) fail('Approve or reject the request.');
+      if (x.status !== 'Pending') fail(`This request is already ${x.status.toLowerCase()}.`);
+      const e = Repo.get('employees', x.employeeId);
+      if (decision === 'Approved' && x.type === 'Annual' && x.days > leaveBalance(e, x.from.slice(0, 4))) fail(`${e.name} doesn't have ${x.days} annual leave days left.`);
+      Repo.update('leaveRequests', x, { status: decision, decidedAt: Clock.now(), decidedBy: activityBy() });
+      log(`Leave ${decision.toLowerCase()}: ${e.name}, ${x.from} to ${x.to}`, {});
     });
   },
   /* One record per employee per day. Recording again for the same day replaces it. */
@@ -1151,6 +1189,20 @@ const Commands = {
 };
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const LEAVE_TYPES = ['Annual', 'Sick', 'Unpaid'];
+const weekday = d => new Date(d + 'T12:00:00Z').getUTCDay();
+function leaveDays(e, from, to) { let n = 0; for (let d = from; d <= to; d = dayAfter(d)) if (!(e.weeklyOff || []).includes(weekday(d))) n++; return n; }
+function dayAfter(d) { const x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + 1); return x.toISOString().slice(0, 10); }
+/* Annual leave days left in a year: the allowance less approved (and, when asked, pending) annual leave. */
+function leaveBalance(e, year, withPending = false) {
+  const used = sum(Repo.by('leaveRequests', 'employeeId', e.id).filter(x => x.type === 'Annual' && x.from.startsWith(year) && (x.status === 'Approved' || (withPending && x.status === 'Pending'))), x => x.days);
+  return Math.max(0, (e.annualLeave ?? 21) - used);
+}
+/* What a day should be for an employee before anyone records it: approved leave, or a weekly day off. */
+function plannedStatus(e, date) {
+  if (Repo.by('leaveRequests', 'employeeId', e.id).some(x => x.status === 'Approved' && x.from <= date && x.to >= date)) return 'Leave';
+  return (e.weeklyOff || []).includes(weekday(date)) ? 'Day off' : null;
+}
 function setAttendance({ employeeId, date, status, checkIn, checkOut, note }) {
   const e = Repo.get('employees', employeeId); if (!e) fail('Unknown employee.');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || isNaN(new Date(date + 'T12:00:00Z'))) fail('Choose a date.');
@@ -1175,11 +1227,11 @@ function walkInCustomer() {
 }
 /* Sales of one product, from its order lines. Revenue is what was delivered and kept, at the net
    unit price (after line and order discounts), so it matches the ledger. */
-function productStats(sku) {
+function productStats(sku, keep = () => true) {
   const out = { ordered: 0, delivered: 0, returned: 0, kept: 0, revenue: 0, cogs: 0, orders: [], first: '', last: '', channels: new Map(), customers: new Map(), areas: new Map() };
   const add = (m, k, units, rev) => { const x = m.get(k) || { units: 0, revenue: 0 }; x.units += units; x.revenue += rev; m.set(k, x); };
   for (const l of Repo.by('lines', 'sku', sku)) {
-    const o = l.orderId != null && orderOf(l.orderId); if (!o) continue;
+    const o = l.orderId != null && orderOf(l.orderId); if (!o || !keep(o)) continue;
     out.orders.push(o);
     if (o.status !== 'Cancelled') { out.ordered += l.qty; if (!out.first || o.at < out.first) out.first = o.at; if (o.at > out.last) out.last = o.at; }
     const kept = l.delivered - l.returned, rev = kept * netUnit(l, o);
@@ -1267,4 +1319,4 @@ function integrity() {
   return out;
 }
 
-export { carrierCharge, GOVERNORATES, SEED_AREAS, govOf, ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };
+export { LEAVE_TYPES, leaveBalance, leaveDays, plannedStatus, carrierCharge, GOVERNORATES, SEED_AREAS, govOf, ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };

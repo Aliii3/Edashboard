@@ -6,7 +6,7 @@ import { buildSeedWorkspace, runLoadTest } from '@commerce-os/domain/seed';
 import { withTx, persistChanges, recordChanges, saveMeta, replaceAll, loadAll, readWorkspace, ensureColumns, type Change } from './db.ts';
 import { loadScope, scopeFor } from './scope.ts';
 
-export type User = { id: number; email: string; name: string; role: string; driverId: string | null };
+export type User = { id: number; email: string; name: string; role: string; driverId: string | null; employeeId?: string | null };
 export class Forbidden extends Error {}
 /* The domain layer keeps one in-memory working set, so requests inside one instance take turns. */
 let chain: Promise<unknown> = Promise.resolve();
@@ -18,6 +18,8 @@ function authorize(user: User, name: string, args: any[]) {
   if (name === 'saveSettings' && !Object.keys(args[0] || {}).every(k => SETTINGS_KEYS.has(k))) throw new Rule('Unknown setting.');
 }
 function authorizeDriver(user: User, name: string, args: any[]) {
+  /* An employee only asks for their own leave (requestLeave is the only command their role may run). */
+  if (user.role === 'employee' && args[0]?.employeeId !== user.employeeId) throw new Forbidden('You can only request your own leave.');
   if (user.role !== 'driver') return;
   const scope = DRIVER_SCOPE[name], own = carrierKey('driver', user.driverId!);
   if (scope === 'driverField' && args[0]?.driverId !== user.driverId) throw new Forbidden('You can only submit your own expenses.');

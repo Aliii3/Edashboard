@@ -121,7 +121,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  // product profile and staff attendance
  await go('#/products');ok('products list',(await p.locator('#main').innerText()).includes('Units sold'));await p.locator('#main a[href="#/products/TEE-IVR"]').first().click();await p.waitForTimeout(80);const ptx=await p.locator('#main').innerText();ok('product profile',ptx.includes('Revenue by week')&&ptx.includes('Top customers'),ptx.slice(0,200));await shot('product');
  await go('#/staff');const emp=await ev(()=>Repo.all('employees').find(e=>e.active!==false).id);await p.locator(`#main tr:has(a[href="#/staff/${emp}"]) button`,{hasText:'Late'}).click();await p.waitForTimeout(120);ok('attendance saved',await ev(`Repo.get('attendance','ATT-${emp}-'+today())?.status`)==='Late');
- await clickBtn('Mark everyone not recorded as present');await p.waitForTimeout(150);ok('all recorded',await ev(()=>Repo.all('employees').filter(e=>e.active!==false).every(e=>Repo.get('attendance',`ATT-${e.id}-${today()}`))));await shot('staff-today');
+ await clickBtn('Mark everyone not recorded');await p.waitForTimeout(150);ok('all recorded',await ev(()=>Repo.all('employees').filter(e=>e.active!==false).every(e=>Repo.get('attendance',`ATT-${e.id}-${today()}`))));await shot('staff-today');
  await p.locator('.tabs button',{hasText:'Monthly sheet'}).click();await p.waitForTimeout(60);ok('monthly sheet',await p.locator('table.sheet tbody tr').count()>=5);await shot('staff-month');
  // integrity after everything
  const bad=await ev(()=>integrity().filter(x=>!x.ok));ok('integrity after flows',!bad.length,JSON.stringify(bad));

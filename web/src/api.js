@@ -6,6 +6,9 @@ export const Session = { user: null, demoTools: false, online: true, version: 0,
   can(cmd) { return !!this.user && canRun(this.user.role, cmd); },
   canSee(screen) { return !!this.user && ROLE_SCREENS[this.user.role].includes(screen); },
   get isDriver() { return this.user?.role === 'driver'; },
+  get isEmployee() { return this.user?.role === 'employee'; },
+  /* Drivers and employees see only their own page, loaded from /api/snapshot/mine. */
+  get isSelf() { return this.isDriver || this.isEmployee; },
   /* Product costs, profit, campaign spend and company expenses: owner and finance only. The server enforces it. */
   get seesCosts() { return !!this.user && seesCosts(this.user.role); },
 };
@@ -25,7 +28,7 @@ let loading = null;
 export function loadSnapshot() {
   return loading ??= (async () => {
     try {
-      if (Session.isDriver) { const d = await request('/api/snapshot/mine'); const v = d.version; delete d.version; Repo.load(d); Session.version = v; Session.onChange?.(); return; }
+      if (Session.isSelf) { const d = await request('/api/snapshot/mine'); const v = d.version; delete d.version; Repo.load(d); Session.version = v; Session.onChange?.(); return; }
       const meta = await request('/api/version'), tables = {}, names = Object.keys(SCHEMA);
       for (const t of names) tables[t] = [];
       /* Usually one request: the server packs every table into it, and says where to continue if not. */

@@ -8,7 +8,7 @@ import { LOGO, NAV, btn, card, chartHover, icon, iconBtn, initials, pad, setPath
 import { order360, ordersView, overview } from './views-core.js';
 import { crmView, driverProfile, inventoryView, shippingView } from './views-ops.js';
 import { campaignsView, financeView, roadmapView, settingsView } from './views-biz.js';
-import { productsView, staffView } from './views-more.js';
+import { performanceView, productsView, staffView } from './views-more.js';
 import { A, closeModal, customerOptionsFor, field, globalSearch, handleCsv, modalLive, orderDraft, renderDraftLines, run, syncAssign, toast } from './actions.js';
 /* ==========================================================================
    LAYER 7 · APP SHELL: router, render loop, delegated events and startup.
@@ -22,7 +22,7 @@ function parseRoute() {
   if ((head === 'products' || head === 'staff') && parts[1]) return { page: head, id: decodeURIComponent(parts[1]) };
   return { page: NAV.some(n => n[0] === head) ? head : 'overview', id: null };
 }
-const VIEWS = { overview, orders: ordersView, order360, crm: crmView, products: productsView, staff: staffView, inventory: inventoryView, shipping: shippingView, driver: () => driverProfile(ui.route.id), finance: financeView, campaigns: campaignsView, settings: settingsView, roadmap: roadmapView };
+const VIEWS = { overview, performance: performanceView, orders: ordersView, order360, crm: crmView, products: productsView, staff: staffView, inventory: inventoryView, shipping: shippingView, driver: () => driverProfile(ui.route.id), finance: financeView, campaigns: campaignsView, settings: settingsView, roadmap: roadmapView };
 let _renderQueued = false, _screenKey = '';
 function render() {
   if (!Session.user || !Repo.data) return;
@@ -30,7 +30,7 @@ function render() {
   if (!allowed(ui.route)) { const h = home(); if (location.hash !== h) { location.hash = h; return; } ui.route = parseRoute(); }
   const navPage = ui.route.page === 'driver' ? 'shipping' : ui.route.page;
   document.getElementById('workspaceName').textContent = S().company;
-  document.getElementById('nav').innerHTML = Session.isDriver ? `<a href="${home()}" class="active" aria-current="page">${icon('shipping')}<span class="nav-title">My deliveries</span></a>` : NAV.filter(([p]) => Session.canSee(p)).map(([p, name]) => `<a href="#/${p}" title="${name}" aria-label="${name}" class="${navPage === p ? 'active' : ''}" ${navPage === p ? 'aria-current="page"' : ''}>${icon(p)}<span class="nav-title">${name}</span></a>`).join('');
+  document.getElementById('nav').innerHTML = Session.isSelf ? `<a href="${home()}" class="active" aria-current="page">${icon(Session.isDriver ? 'shipping' : 'staff')}<span class="nav-title">${Session.isDriver ? 'My deliveries' : 'My page'}</span></a>` : NAV.filter(([p]) => Session.canSee(p)).map(([p, name]) => `<a href="#/${p}" title="${name}" aria-label="${name}" class="${navPage === p ? 'active' : ''}" ${navPage === p ? 'aria-current="page"' : ''}>${icon(p)}<span class="nav-title">${name}</span></a>`).join('');
   translateTree(document.getElementById('nav'));   // measure the highlight against the translated labels
   placeNavPill(document.getElementById('nav'));
   const a = document.activeElement, focusId = a && a.id && a.id.startsWith('s-') ? a.id : null, caret = focusId ? a.selectionStart : 0;
@@ -133,21 +133,21 @@ const langToggle = () => `<button type="button" class="iconbtn lang-toggle" data
 function renderChrome() {
   document.getElementById('logoMark').innerHTML = LOGO(32);
   const rail = document.getElementById('rail'), link = (page, ic, label) => Session.canSee(page) ? `<a class="iconbtn" href="#/${page}" aria-label="${label}" title="${label}">${icon(ic)}</a>` : '';
-  rail.hidden = Session.isDriver;
-  rail.innerHTML = Session.isDriver ? '' : [iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)'), iconBtn('plus', 'newOrder', undefined, 'New order'), iconBtn('store', 'storeSaleModal', undefined, 'In-store sale'), iconBtn('upload', 'importModal', undefined, 'Import orders from CSV'), iconBtn('download', 'exportOrders', undefined, 'Export orders as CSV'), '<span class="rail-gap"></span>', link('orders', 'orders', 'Orders'), link('shipping', 'truck', 'Shipping'), link('finance', 'finance', 'Finance'), link('staff', 'staff', 'Staff'), '<span class="rail-gap"></span>', link('roadmap', 'roadmap', 'Roadmap'), link('settings', 'settings', 'Settings')].join('');
-  document.getElementById('topActions').innerHTML = (Session.isDriver ? '' : iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)')) + iconBtn('refresh', 'syncNow', undefined, 'Get the latest changes') + langToggle();
+  rail.hidden = Session.isSelf;
+  rail.innerHTML = Session.isSelf ? '' : [iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)'), iconBtn('plus', 'newOrder', undefined, 'New order'), iconBtn('store', 'storeSaleModal', undefined, 'In-store sale'), iconBtn('upload', 'importModal', undefined, 'Import orders from CSV'), iconBtn('download', 'exportOrders', undefined, 'Export orders as CSV'), '<span class="rail-gap"></span>', link('orders', 'orders', 'Orders'), link('shipping', 'truck', 'Shipping'), link('finance', 'finance', 'Finance'), link('staff', 'staff', 'Staff'), '<span class="rail-gap"></span>', link('roadmap', 'roadmap', 'Roadmap'), link('settings', 'settings', 'Settings')].join('');
+  document.getElementById('topActions').innerHTML = (Session.isSelf ? '' : iconBtn('search', 'focusSearch', undefined, 'Search (⌘K)')) + iconBtn('refresh', 'syncNow', undefined, 'Get the latest changes') + langToggle();
 }
 async function enter() {
   Session.onProgress = (i, n) => { const el = document.getElementById('main'); if (el && !Repo.data) el.innerHTML = `<p class="empty">Loading workspace… ${Math.round(i / n * 100)}%</p>`; };
   await loadSnapshot(); startSync();
-  document.getElementById('header').hidden = false; document.getElementById('dock').hidden = Session.isDriver;
+  document.getElementById('header').hidden = false; document.getElementById('dock').hidden = Session.isSelf;
   document.getElementById('accountBtn').textContent = initials(Session.user.name);
   renderChrome(); startSmoothScroll();
   if (!location.hash || !allowed(parseRoute())) location.hash = home();
   render();
 }
-const home = () => Session.isDriver ? `#/drivers/${Session.user.driverId}` : Session.canSee('overview') ? '#/overview' : '#/orders';
-const allowed = r => Session.canSee(r.page) && (!Session.isDriver || r.id === Session.user.driverId);
+const home = () => Session.isDriver ? `#/drivers/${Session.user.driverId}` : Session.isEmployee ? `#/staff/${Session.user.employeeId}` : Session.canSee('overview') ? '#/overview' : '#/orders';
+const allowed = r => Session.canSee(r.page) && (!Session.isDriver || r.id === Session.user.driverId) && (!Session.isEmployee || r.id === Session.user.employeeId);
 async function boot() {
   startI18n();
   bindEvents();
