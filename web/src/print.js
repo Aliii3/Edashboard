@@ -4,7 +4,7 @@
    Printed through a hidden frame, so the screen is left as it is.
    ========================================================================== */
 import { esc, round2, sum } from '@commerce-os/domain';
-import { S, activeDelivery, calc, carrierName, customerOf, linesOf, money, orderOf } from '@commerce-os/domain';
+import { govOf, S, activeDelivery, calc, carrierName, customerOf, linesOf, money, orderOf } from '@commerce-os/domain';
 import { isAr, trText } from './i18n.js';
 import { fd, latestDelivery } from './ui-kit.js';
 
@@ -41,7 +41,7 @@ function label(o, size) {
     <header><div><b>${esc(s.company)}</b>${s.companyPhone ? `<span>${esc(s.companyPhone)}</span>` : ''}</div><div class="r"><span>${esc(T(fd(o.at)))}</span>${d && d.mode !== 'store' ? `<span>${esc(T(carrierName(d)))}</span>` : ''}</div></header>
     <div class="ordno"><span>${T('Order')}</span><b>#${esc(o.id)}</b></div>
     ${barcodeSvg(String(o.id), small ? 10 : 13)}
-    <div class="to"><small>${T('Ship to')}</small><b class="name">${esc(c?.name || '')}</b><div class="phone">${esc(c?.phone || '')}</div><div class="addr">${esc(o.address || '')}</div><div class="area">${esc(T(o.area || ''))}</div>${o.instructions ? `<div class="instr">${esc(o.instructions)}</div>` : ''}</div>
+    <div class="to"><small>${T('Ship to')}</small><b class="name">${esc(c?.name || '')}</b><div class="phone">${esc(c?.phone || '')}</div><div class="addr">${esc(o.address || '')}</div><div class="area">${esc([govOf(o.area), o.area].filter(Boolean).map(T).join(' – '))}</div>${o.instructions ? `<div class="instr">${esc(o.instructions)}</div>` : ''}</div>
     <div class="cod ${due > 0 ? '' : 'paid'}"><small>${due > 0 ? T('Collect from customer') : T('Paid. Collect nothing.')}</small>${due > 0 ? `<b>${esc(M(due))}</b>` : ''}</div>
     ${itemsList(o, small ? 3 : 7)}
     <footer><span>${units} ${T(units === 1 ? 'unit' : 'units')}</span>${d?.tracking ? `<span>${T('Tracking no.')} <b>${esc(d.tracking)}</b></span>` : ''}${d ? `<span>${esc(d.id)}</span>` : ''}</footer>

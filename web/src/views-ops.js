@@ -1,8 +1,8 @@
 import { DELIVERY_STATUSES } from '@commerce-os/domain';
 import { Session } from './api.js';
 import { Repo, esc, fail, round2, sum } from '@commerce-os/domain';
-import { WALK_IN, Guards, S, TERMINAL_DELIVERY, activeDelivery, availableOf, bomCost, calc, carrierKey, contributionOf, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, log, orderOf, orderValue, overdueWhy, paymentStatus, reservedOf, stockOnHand, tol } from '@commerce-os/domain';
-import { badge, btn, card, carrierA, courierOptions, custA, dateF, delA, fd, fdt, grid, heading, initials, kpi, m, note, orderA, pad, row, search, sel, simpleTable, skuA, tabs, timeline, ui } from './ui-kit.js';
+import { carrierName, govOf, WALK_IN, Guards, S, TERMINAL_DELIVERY, activeDelivery, availableOf, bomCost, calc, carrierKey, contributionOf, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, log, orderOf, orderValue, overdueWhy, paymentStatus, reservedOf, stockOnHand, tol } from '@commerce-os/domain';
+import { areaLabel, badge, btn, card, carrierA, courierOptions, custA, dateF, delA, fd, fdt, grid, heading, initials, kpi, m, note, orderA, pad, row, search, sel, simpleTable, skuA, tabs, timeline, ui } from './ui-kit.js';
 import { caseButtons } from './views-core.js';
 import { A } from './actions.js';
 import { VIEWS, render } from './main.js';
@@ -155,7 +155,7 @@ function shippingView() {
       const selCol = { k: 'sel', label: '', render: o => `<input type="checkbox" aria-label="Select order ${o.id}" data-sel="${o.id}" ${ui.selected.has(o.id) ? 'checked' : ''}>` };
       const orderCols = last => [selCol,
         { k: 'i', label: 'Order', sort: o => o.id, render: o => `${orderA(o.id)}<br><small>${fd(o.at)}</small>` },
-        { k: 'c', label: 'Customer / area', render: o => `${custA(customerOf(o))}<br><small>${esc(o.area)}</small>` },
+        { k: 'c', label: 'Customer / area', render: o => `${custA(customerOf(o))}<br><small>${areaLabel(o.area)}</small>` },
         { k: 'it', label: 'Items', wrap: true, render: o => `<small>${linesOf(o).map(l => `${l.qty} × ${esc(l.name)} ${esc(l.variant)}`).join('<br>')}</small>` },
         { k: 'v', label: 'To collect', num: true, render: o => m(Math.max(0, calc(o).value - calc(o).paid)) },
         { k: 's', label: 'Status', render: o => badge(o.status) }, last];
@@ -165,6 +165,23 @@ function shippingView() {
         + card(`1 · To pack (${packing.length})`, `${grid('dp', packing, orderCols({ k: 'a', label: '', render: o => btn('Mark ready', 'advance', [o.id, 'Ready'], { cls: 'small primary' }) }), { sort: 'i', dir: 1, size: 10, empty: 'Nothing to pack. Confirmed orders appear here.' })}<div class="pad actions">${btn('Mark selected ready', 'bulkReady', undefined, { why: nPack ? '' : 'Tick orders in this list first.' })}${btn('Print packing slips (invoice)', 'bulkPrint', 'invoice', { why: nPack ? '' : 'Tick orders in this list first.' })}</div>`, 'Confirmed orders with stock reserved')
         + `<div class="sp"></div>` + card(`2 · Ready to ship (${ready.length})`, `${grid('dq', ready, orderCols({ k: 'a', label: '', render: o => btn('Ship', 'shipModal', [o.id], { cls: 'small primary' }) }), { sort: 'i', dir: 1, size: 10, empty: 'No packed orders are waiting for a carrier.' })}<div class="pad actions">${btn('Ship selected', 'bulkShip', undefined, { why: nReady ? '' : 'Tick orders in this list first.' })}${btn('Print labels', 'bulkPrint', 'label', { why: nReady ? '' : 'Tick orders in this list first.' })}</div>`, 'External courier or private driver. Both use the same records.')
         + `<div class="sp"></div>` + card(`3 · Waiting for pickup (${waiting.length})`, `${grid('dw', waiting, [{ k: 'sel', label: '', render: d => `<input type="checkbox" aria-label="Select order ${d.orderId}" data-sel="${d.orderId}" ${ui.selected.has(d.orderId) ? 'checked' : ''}>` }, ...deliveryCols({ carrier: true })], { sort: 'as', dir: 1, size: 10, empty: 'Nothing is waiting for pickup.' })}<div class="pad actions">${btn('Record pickup for selected', 'bulkPickup', undefined, { why: nWait ? '' : 'Tick deliveries in this list first.' })}${btn('Print labels', 'bulkPrint', 'label', { why: nWait ? '' : 'Tick deliveries in this list first.' })}</div>`, 'Pickup converts the reservation into a stock deduction.');
+    },
+    /* Every parcel out with a driver or courier, with the two outcomes: delivered or returned. */
+    'With carriers': () => {
+      const out = active.filter(d => d.pickedUpAt && d.status !== 'Handed Over'), carriers = [...new Map(out.map(d => [d.carrierKey, d])).values()];
+      const rows = out.filter(d => (!st.carrier || d.carrierKey === st.carrier) && (!st.gov || govOf(orderOf(d.orderId).area) === st.gov));
+      const outcome = d => d.status === 'Return in Transit' || d.status === 'Partially Delivered' ? btn('Returned', 'returnedModal', d.id, { cls: 'small' }) : btn('Delivered', 'deliveredModal', d.id, { cls: 'small primary' }) + btn('Returned', 'returnedModal', d.id, { cls: 'small' });
+      return note('Record each parcel as Delivered (in full or in part) or Returned. Cash a driver collects goes on their balance. Receive it under Finance → Driver cash, where their commission is deducted.')
+        + `<section class="card"><div class="filters">${sel('ship.carrier', 'Driver or courier', [['', 'All'], ...carriers.map(d => [d.carrierKey, carrierName(d)])], 'wc')}${sel('ship.gov', 'Governorate', [['', 'All'], ...[...new Set(out.map(d => govOf(orderOf(d.orderId).area)).filter(Boolean))]], 'wc')}<span class="muted small">${rows.length} parcels</span></div>${grid('wc', rows, [
+          { k: 'id', label: 'Order', sort: d => d.orderId, render: d => `${orderA(d.orderId)}<br><small>${esc(d.id)}</small>` },
+          { k: 'c', label: 'Customer', render: d => { const c = customerOf(orderOf(d.orderId)); return `${custA(c)}<br><small>${esc(c.phone)}</small>`; } },
+          { k: 'ad', label: 'Governorate / address', wrap: true, render: d => { const x = orderOf(d.orderId); return `${areaLabel(x.area)}<br><small>${esc(x.address)}</small>`; } },
+          { k: 'car', label: 'Carrier', sort: d => carrierName(d), render: d => carrierA(d) },
+          { k: 'st', label: 'Status', sort: d => d.status, render: d => badge(d.status) },
+          { k: 'cm', label: 'Commission', num: true, render: d => m(d.cost || 0) },
+          { k: 'ex', label: 'To collect', num: true, sort: d => expectedFromCustomer(d), render: d => m(expectedFromCustomer(d)) },
+          { k: 'ac', label: '', render: outcome },
+        ], { sort: 'id', dir: 1, empty: 'No parcels are out with a carrier.' })}</section>`;
     },
     'External couriers': () => {
       const couriers = Repo.all('couriers');

@@ -192,3 +192,43 @@ test('in-store sales, one-step shipping, tracking, attendance and product figure
   assert.equal(round2(fromProducts + fees), totals().revenue);
   const ps = productStats('TEE-IVR'); assert.ok(ps.kept > 0 && ps.channels.get('In-store').units >= 2);
 });
+
+test('board shipping: commission, one-step delivered and returned, commission kept at handover', async () => {
+  const { driverCommissionOwed, govOf, orderOf, AREAS, SEED_AREAS } = await import('../src/index.js');
+  buildSeedWorkspace();
+  const throws = (fn, re) => assert.throws(fn, e => e instanceof Rule && (!re || re.test(e.message)), String(re));
+  assert.equal(govOf('New Cairo'), 'Cairo'); assert.equal(govOf('6th of October'), 'Giza');
+  assert.equal(new Set(AREAS).size, AREAS.length, 'area names are unique');
+  assert.ok(SEED_AREAS.every(a => AREAS.includes(a)));
+  const cust = Repo.all('customers')[0], drv = Repo.all('drivers').find(d => d.active !== false && d.availability !== 'Off duty').id;
+  Commands.adjustStock({ item: 'TEE-IVR', itemType: 'sku', qty: 10, reason: 't' });
+  const ready = () => { const o = Commands.createOrder({ customerId: cust.id, lines: [{ sku: 'TEE-IVR', qty: 1 }], channel: 'Phone', paymentMethod: 'COD' }); Commands.confirmOrder(o.id); Commands.advanceOrder(o.id, 'Processing'); Commands.advanceOrder(o.id, 'Ready'); return o; };
+  const owed0 = driverCommissionOwed(drv);
+  /* Shipped with a commission; the driver has it on assignment. */
+  const a = ready(), da = Commands.shipOrder(a.id, 'driver', drv, { then: 'out', cost: 30 });
+  assert.equal(da.cost, 30); assert.equal(da.status, 'Out for Delivery');
+  throws(() => Commands.shipOrder(ready().id, 'driver', drv, { then: 'out', cost: -1 }), /Commission/);
+  const due = round2(calc(orderOf(a.id)).value);
+  Commands.quickDeliver(da.id, { quantities: Object.fromEntries(da.items.map(i => [i.lineId, i.qty])), collection: { amount: due, method: 'Cash' } });
+  assert.equal(Repo.get('deliveries', da.id).status, 'Delivered');
+  assert.equal(driverCommissionOwed(drv), round2(owed0 + 30));
+  /* Delivered on a later try, after a failed attempt. */
+  const c = ready(), dc = Commands.shipOrder(c.id, 'driver', drv, { then: 'out', cost: 30 });
+  Commands.setDeliveryStatus(dc.id, 'Failed Attempt', { reason: 'Customer unreachable' });
+  Commands.quickDeliver(dc.id, { quantities: Object.fromEntries(dc.items.map(i => [i.lineId, i.qty])), collection: { amount: 0, shortReason: 'Prepaid later' } });
+  assert.equal(Repo.get('deliveries', dc.id).status, 'Delivered');
+  /* Returned in one step from Picked Up. */
+  const b = ready(), db = Commands.shipOrder(b.id, 'driver', drv, { then: 'picked', cost: 20 });
+  throws(() => Commands.quickReturn(db.id, { reason: 'Nope' }), /why it came back/);
+  Commands.quickReturn(db.id, { reason: 'Customer refused', shipping: 'business' });
+  assert.equal(Repo.get('deliveries', db.id).status, 'Returned to Warehouse');
+  /* At handover the driver keeps their commission: an approved payout, less cash owed, no change to profit. */
+  const owed = driverCommissionOwed(drv), cash = driverCash(drv).outstanding, profit = totals().profit, keep = Math.min(owed, cash);
+  throws(() => Commands.recordHandover({ driverId: drv, ref: 'T-HO-1', receivedBy: 'T', allocations: [{ deliveryId: da.id, amount: 1 }], commission: owed + 1 }), /at most/);
+  const hand = round2(Math.min(due, cash - keep));
+  Commands.recordHandover({ driverId: drv, ref: 'T-HO-2', receivedBy: 'T', allocations: hand > 0 ? [{ deliveryId: da.id, amount: hand }] : [], commission: keep });
+  assert.equal(driverCommissionOwed(drv), round2(owed - keep));
+  assert.equal(driverCash(drv).outstanding, round2(cash - keep - Math.max(0, hand)));
+  assert.equal(totals().profit, profit, 'commission is already a shipping cost');
+  assert.deepEqual(integrity().filter(x => !x.ok), []);
+});

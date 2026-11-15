@@ -233,3 +233,6 @@ td.ac .acell,td.ac span{display:inline-block;min-width:24px;padding:3px 2px;bord
 .board-n{display:inline-block;min-width:22px;padding:0 7px;margin-inline-start:6px;border-radius:999px;background:var(--accent-soft,#2f80ff1f);font-size:13px;text-align:center}
 .board-chips{padding:0}
 @media (max-width:760px){.grid.board{grid-template-columns:1fr}}
+.board-scroll{max-height:420px;overflow-y:auto;overscroll-behavior:contain}
+.board-pick{display:flex;gap:10px;align-items:flex-start;flex:1;min-width:0}.board-pick input{margin-top:4px}
+.board-box .filters{padding:0 18px}

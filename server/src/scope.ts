@@ -20,7 +20,7 @@ export function scopeFor(name: string, a: any[]): Scope {
     case 'storeSale': return scope({ customers: [first(a).customerId, 'C-WALKIN'], phones: [phone(first(a).customer?.phone)] });
     case 'openCase': return scope({ orders: [first(a).orderId] });
     case 'refund': { const src = a[1]?.source; return scope({ orders: [a[0]], drivers: typeof src === 'string' && src.startsWith('driver:') ? [src.slice(7)] : [] }); }
-    case 'reassign': case 'driverHandover': case 'setTracking': case 'pickup': case 'setDeliveryStatus': case 'deliver': case 'collect': case 'startReturn': case 'receiveAtWarehouse': return scope({ deliveries: [a[0]] });
+    case 'reassign': case 'driverHandover': case 'setTracking': case 'pickup': case 'setDeliveryStatus': case 'deliver': case 'collect': case 'startReturn': case 'receiveAtWarehouse': case 'quickDeliver': case 'quickReturn': return scope({ deliveries: [a[0]] });
     case 'recordHandover': case 'addDriverExpense': return scope({ drivers: [first(a).driverId] });
     case 'decideDriverExpense': return scope({ driverExpenses: [a[0]] });
     case 'resolveDiscrepancy': return scope({ discrepancies: [a[0]] });

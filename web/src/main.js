@@ -3,7 +3,7 @@ import './styles.css';
 import { enterScreen, refreshScreen, scrollTop, startSmoothScroll } from './motion.js';
 import { isAr, startI18n, translateTree } from './i18n.js';
 import { Repo, esc } from '@commerce-os/domain';
-import { S } from '@commerce-os/domain';
+import { GOVERNORATES, S } from '@commerce-os/domain';
 import { LOGO, NAV, card, chartHover, icon, iconBtn, initials, pad, setPath, ui } from './ui-kit.js';
 import { order360, ordersView, overview } from './views-core.js';
 import { crmView, driverProfile, inventoryView, shippingView } from './views-ops.js';
@@ -87,7 +87,8 @@ function bindEvents() {
     if (t.dataset.avail) return run(() => Commands.setAvailability(t.dataset.avail, t.value), 'Availability updated.');
     if (t.dataset.source) return run(() => Commands.saveSettings({ sources: { ...S().sources, [t.dataset.source]: t.value } }), t.value === 'API (planned)' ? 'Preference saved. No API is connected.' : 'Preference saved.');
     if (t.dataset.roadmap) return run(() => Commands.setRoadmap(t.dataset.roadmap, t.checked));
-    if (t.dataset.assignMode) return syncAssign();
+    if (t.dataset.assignMode) { syncAssign(); if (modalLive) modalLive(e); return; }
+    if (t.dataset.gov) { const s = t.form?.elements[t.dataset.gov]; if (s) s.innerHTML = (GOVERNORATES[t.value] || []).map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join(''); return; }
     if (t.dataset.dl) { orderDraft[Number(t.dataset.i)][t.dataset.dl] = t.value; return renderDraftLines(); }
     if (t.id === 'csvFile') return handleCsv(t.files[0]);
     if (t.closest('#dialog') && modalLive) modalLive(e);

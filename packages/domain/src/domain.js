@@ -28,7 +28,41 @@ const FAILURE_REASONS = ['Customer unreachable', 'Customer refused', 'Wrong addr
 const RETURN_REASONS = ['Customer not available', 'Customer refused', 'Wrong or incomplete address', 'Customer cancelled', 'Damaged in transit', 'Other'];
 const EXPENSE_CATS = ['Rent', 'Salaries', 'Utilities', 'Software', 'Packing labor', 'Other'];
 const DRIVER_EXPENSE_CATS = ['Fuel', 'Parking', 'Toll', 'Maintenance', 'Delivery fee payout', 'Other'];
-const AREAS = ['New Cairo', 'Maadi', 'Nasr City', 'Heliopolis', 'Zamalek', 'Dokki', 'Mohandessin', 'Giza', '6th of October', 'Sheikh Zayed', 'Alexandria', 'Mansoura'];
+/* Governorate → areas. A customer or order stores the area; the governorate is looked up from it,
+   so every area name is unique. The first twelve areas are the original list (the demo seed picks from them). */
+const GOVERNORATES = {
+  'Cairo': ['New Cairo', 'Maadi', 'Nasr City', 'Heliopolis', 'Zamalek', 'Downtown', 'Mokattam', 'Shubra', 'Ain Shams', 'Helwan', 'Shorouk', 'Madinaty', 'Rehab', 'Obour', 'New Capital', 'Mostakbal City', 'Manial', 'Garden City', 'Old Cairo', 'Abbasiya', 'Hadayek El Kobba', 'Matareya', 'El Marg', 'El Salam', 'Badr City', '15th of May'],
+  'Giza': ['Dokki', 'Mohandessin', 'Giza', '6th of October', 'Sheikh Zayed', 'Agouza', 'Haram', 'Faisal', 'Imbaba', 'Hadayek El Ahram', 'Omraneya', 'Bulaq El Dakrour', 'Warraq', 'Kerdasa', 'Hawamdeya', 'Badrashin', 'Atfih', 'El Ayat', 'El Saff'],
+  'Alexandria': ['Alexandria', 'Smouha', 'Sidi Gaber', 'Miami', 'Montaza', 'Agami', 'Borg El Arab', 'Sporting', 'Stanley', 'Gleem', 'Mandara', 'Raml Station', 'Amreya', 'Kafr Abdo', 'Sidi Bishr', 'Mahatet El Raml'],
+  'Dakahlia': ['Mansoura', 'Talkha', 'Mit Ghamr', 'Dekernes', 'Aga', 'Sherbin', 'Belqas'],
+  'Qalyubia': ['Banha', 'Shubra El Kheima', 'Qalyub', 'Khanka', 'Kafr Shukr', 'Tukh', 'Qaha'],
+  'Sharqia': ['Zagazig', '10th of Ramadan', 'Belbeis', 'Abu Hammad', 'Faqous', 'Minya El Qamh', 'Hehya'],
+  'Gharbia': ['Tanta', 'El Mahalla El Kubra', 'Kafr El Zayat', 'Zefta', 'Samanoud', 'Santa'],
+  'Monufia': ['Shebin El Kom', 'Sadat City', 'Menouf', 'Ashmoun', 'Quesna', 'Tala', 'Berket El Sabaa'],
+  'Beheira': ['Damanhour', 'Kafr El Dawwar', 'Rashid', 'Edku', 'Abu Hummus', 'Kom Hamada', 'Wadi El Natrun'],
+  'Kafr El Sheikh': ['Kafr El Sheikh', 'Desouk', 'Baltim', 'Fuwwah', 'Sidi Salem', 'Qallin'],
+  'Damietta': ['Damietta', 'New Damietta', 'Ras El Bar', 'Faraskur', 'Kafr Saad'],
+  'Port Said': ['Port Said', 'Port Fouad'],
+  'Ismailia': ['Ismailia', 'Fayed', 'El Qantara', 'Abu Suwir', 'El Tal El Kabir'],
+  'Suez': ['Suez', 'Ain Sokhna'],
+  'Fayoum': ['Fayoum', 'Ibsheway', 'Tamiya', 'Sinnuris', 'Itsa'],
+  'Beni Suef': ['Beni Suef', 'New Beni Suef', 'El Wasta', 'Nasser', 'Biba'],
+  'Minya': ['Minya', 'New Minya', 'Mallawi', 'Samalut', 'Beni Mazar', 'Maghagha', 'Abu Qurqas'],
+  'Assiut': ['Assiut', 'New Assiut', 'Dairut', 'Manfalut', 'Abnoub', 'El Qusiya'],
+  'Sohag': ['Sohag', 'New Sohag', 'Akhmim', 'Girga', 'Tahta', 'El Balyana'],
+  'Qena': ['Qena', 'Nag Hammadi', 'Qus', 'Dishna', 'Abu Tesht'],
+  'Luxor': ['Luxor', 'Esna', 'Armant'],
+  'Aswan': ['Aswan', 'Kom Ombo', 'Edfu', 'Daraw'],
+  'Red Sea': ['Hurghada', 'Safaga', 'El Gouna', 'Marsa Alam', 'El Qusair'],
+  'South Sinai': ['Sharm El Sheikh', 'Dahab', 'El Tor', 'Nuweiba', 'Saint Catherine'],
+  'North Sinai': ['Arish', 'Bir El Abd', 'Sheikh Zuweid'],
+  'Matrouh': ['Marsa Matrouh', 'El Alamein', 'Sahel', 'Siwa', 'El Dabaa'],
+  'New Valley': ['Kharga', 'Dakhla', 'Farafra'],
+};
+const SEED_AREAS = ['New Cairo', 'Maadi', 'Nasr City', 'Heliopolis', 'Zamalek', 'Dokki', 'Mohandessin', 'Giza', '6th of October', 'Sheikh Zayed', 'Alexandria', 'Mansoura'];
+const AREAS = Object.values(GOVERNORATES).flat();
+const GOV_OF = new Map(Object.entries(GOVERNORATES).flatMap(([g, as]) => as.map(a => [a, g])));
+const govOf = area => GOV_OF.get(area) || '';
 const DEFAULT_SETTINGS = {
   company: 'Nile Studio', currency: 'EGP', timezone: 'Africa/Cairo', tolerance: 5,
   overdueHours: 24, defaultFulfillment: 'driver', allocationPolicy: 'equal', pageSize: 25,
@@ -273,6 +307,12 @@ function driverCash(id) {
   const openDisc = sum(Repo.by('discrepancies', 'carrierKey', key).filter(x => x.status === 'Open'), x => x.amount);
   return { collected, refunds, handed, approvedCash, pendingExp, nonCash, expected, outstanding, openDisc };
 }
+/* Commission earned on finished trips (delivered or returned) less what the driver already kept. */
+function driverCommissionOwed(id) {
+  const earned = sum(Repo.by('deliveries', 'carrierKey', carrierKey('driver', id)).filter(d => d.pickedUpAt && (d.completedAt || d.returnedAt) && d.shippingPaidBy !== 'waived'), d => (d.cost || 0) + (d.returnedAt ? d.returnCost || 0 : 0));
+  const paid = sum(Repo.by('driverExpenses', 'driverId', id).filter(e => e.category === 'Delivery fee payout' && e.status !== 'Rejected'), e => e.amount);
+  return round2(Math.max(0, earned - paid));
+}
 function driverStats(id) {
   const ds = Repo.by('deliveries', 'carrierKey', carrierKey('driver', id));
   const c = s => ds.filter(d => d.status === s).length;
@@ -406,7 +446,9 @@ const Commands = {
     return Repo.tx(() => {
       const then = opts.then || 'assigned';
       if (!['assigned', 'picked', 'out'].includes(then)) fail('Choose what happens after assigning.');
-      const d = Commands.assign(orderId, mode, carrierId, { tracking: opts.tracking });
+      const cost = opts.cost === undefined || opts.cost === '' || opts.cost === null ? undefined : Number(opts.cost);
+      if (cost !== undefined && !(cost >= 0)) fail('Commission must be zero or more.');
+      const d = Commands.assign(orderId, mode, carrierId, { tracking: opts.tracking, cost });
       if (then !== 'assigned') Commands.pickup(d.id);
       if (then === 'out') Commands.setDeliveryStatus(d.id, 'Out for Delivery', { note: 'Out for delivery' });
       return Repo.get('deliveries', d.id);
@@ -555,6 +597,25 @@ const Commands = {
       if (open) Commands._syncShortfall(o, Repo.get('deliveries', open.deliveryId), open.reason);
     });
   },
+  /* One step from "with the carrier" to delivered: goes out for delivery first when needed. */
+  quickDeliver(deliveryId, payload) {
+    return Repo.tx(() => {
+      const d = Repo.get('deliveries', deliveryId); if (!d) fail('Unknown delivery.');
+      if (d.status === 'Failed Attempt') Commands.setDeliveryStatus(d.id, 'Retry Scheduled', { retryAt: Clock.now(), note: 'Delivered on a later try' });
+      if (['Picked Up', 'Failed Attempt', 'Retry Scheduled'].includes(d.status)) Commands.setDeliveryStatus(d.id, 'Out for Delivery', { note: 'Out for delivery' });
+      return Commands.deliver(deliveryId, payload);
+    });
+  },
+  /* One step from "with the carrier" to back in the warehouse, recording why it came back. */
+  quickReturn(deliveryId, outcome = {}) {
+    return Repo.tx(() => {
+      const d = Repo.get('deliveries', deliveryId); if (!d) fail('Unknown delivery.');
+      if (!RETURN_REASONS.includes(outcome.reason)) fail('Choose why it came back.');
+      if (d.status === 'Out for Delivery') Commands.setDeliveryStatus(d.id, 'Failed Attempt', { reason: 'Other', note: outcome.reason });
+      if (d.status !== 'Return in Transit') Commands.startReturn(d.id, outcome.reason);
+      return Commands.receiveAtWarehouse(d.id, outcome.note, outcome);
+    });
+  },
   startReturn(deliveryId, note) { return Commands.setDeliveryStatus(deliveryId, 'Return in Transit', { note: note || 'Heading back to the warehouse' }); },
   /* Physical handover at the warehouse: undelivered units return to stock, once. */
   /* Physical handover at the warehouse: undelivered units return to stock, once.
@@ -594,8 +655,14 @@ const Commands = {
 
   /* DRIVER MONEY */
   /* A handover moves custody of cash. It creates no revenue or profit. */
-  recordHandover({ driverId, ref, at, receivedBy, allocations, declared, note }) {
+  recordHandover({ driverId, ref, at, receivedBy, allocations, declared, note, commission }) {
     return Repo.tx(() => {
+      /* The driver keeps their commission from the cash: booked as a delivery fee payout (already in shipping costs). */
+      commission = round2(Number(commission) || 0);
+      if (commission < 0 || commission > driverCommissionOwed(driverId) + 0.001) fail(`Commission kept can be at most ${money(driverCommissionOwed(driverId))}.`);
+      if (commission > 0) { const x = Commands.addDriverExpense({ driverId, category: 'Delivery fee payout', amount: commission, paidFromCash: true, note: `Commission kept at handover ${ref || ''}`.trim() }); Commands.decideDriverExpense(x, 'Approved'); }
+      /* The commission used up all the cash: nothing is handed over. */
+      if (commission > 0 && !(allocations || []).some(a => Number(a.amount) > 0)) return null;
       const dr = Repo.get('drivers', driverId); if (!dr) fail('Unknown driver.');
       ref = (ref || '').trim(); if (!ref) fail('A unique handover reference is required.');
       if (Repo.count('handovers', 'ref', ref)) fail(`Handover reference ${ref} already exists.`);
@@ -1178,4 +1245,4 @@ function integrity() {
   return out;
 }
 
-export { ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };
+export { driverCommissionOwed, GOVERNORATES, SEED_AREAS, govOf, ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };

@@ -2,8 +2,8 @@ import { Commands, Session, request, loadSnapshot, pull } from './api.js';
 import { isAr, setLang } from './i18n.js';
 import { ROLES } from '@commerce-os/domain';
 import { Repo, Rule, esc, fail, round2, sum } from '@commerce-os/domain';
-import { ATTENDANCE_STATUSES, lateMinutes, RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
-import { act, badge, blankOrderFilters, btn, carrierA, custA, dayShift, fd, fdt, filteredOrders, grid, kpi, latestDelivery, m, note, orderA, orderSearchText, presetRange, rangeLabel, row, search, setPath, simpleTable, timeline, today, ui } from './ui-kit.js';
+import { driverCommissionOwed, ATTENDANCE_STATUSES, lateMinutes, RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
+import { act, areaLabel, govAreaF, badge, blankOrderFilters, btn, carrierA, custA, dayShift, fd, fdt, filteredOrders, grid, kpi, latestDelivery, m, note, orderA, orderSearchText, presetRange, rangeLabel, row, search, setPath, simpleTable, timeline, today, ui } from './ui-kit.js';
 import { custodyLabel, returnRate } from './views-core.js';
 import { deliveryActions } from './views-ops.js';
 import { render } from './main.js';
@@ -121,6 +121,7 @@ const A = {
     for (const e of Repo.all('employees')) for (const a of Repo.by('attendance', 'employeeId', e.id).filter(x => x.date.startsWith(mo)).sort((x, y) => x.date.localeCompare(y.date))) rows.push([e.id, e.name, e.jobTitle || '', a.date, a.status, a.checkIn || '', a.checkOut || '', lateMinutes(a), a.note || '', a.by || '']);
     download(`attendance-${mo}.csv`, toCsv(rows), 'text/csv'); toast(`${rows.length - 1} attendance records exported.`);
   },
+  goWithCarriers(key) { ui.ship.carrier = key || ''; ui.ship.gov = ''; A.goShip('With carriers'); },
   goShip(tab) { ui.ship.tab = tab; location.hash = '#/shipping'; render(); },
   clearOrders() { ui.orders = blankOrderFilters(); render(); },
   clearOv() { Object.assign(ui.ov, { campaign: '', sku: '', courier: '', driver: '' }); render(); },
@@ -133,7 +134,7 @@ const A = {
     orderDraft = [{ sku: Repo.all('skus')[0].id, qty: 1, discount: 0 }];
     const c = customerId ? Repo.get('customers', customerId) : null;
     modal('New order', `${note('Stock is checked now and reserved when you confirm. Entry method is recorded as Manual. Sales channel is separate.')}<div class="formgrid"><label class="field full">Customer (search by name or phone)<input name="customerPick" list="custList" autocomplete="off" value="${c ? esc(`${c.id} · ${c.name} · ${c.phone}`) : ''}" placeholder="Start typing…"></label><datalist id="custList">${customerOptionsFor('')}</datalist></div>
-      <details class="whynot" ${c ? '' : ''}><summary>Or add a new customer</summary><div class="formgrid mt">${field('Name', 'nName')}${field('Mobile', 'nPhone', 'tel', '', 'placeholder="01012345678"')}${selectF('Area', 'nArea', AREAS)}${field('Address', 'nAddress')}</div></details>
+      <details class="whynot" ${c ? '' : ''}><summary>Or add a new customer</summary><div class="formgrid mt">${field('Name', 'nName')}${field('Mobile', 'nPhone', 'tel', '', 'placeholder="01012345678"')}${govAreaF('nArea', '')}${field('Address', 'nAddress')}</div></details>
       <h3 class="mt">Line items</h3><div id="draftLines"></div><button type="button" data-dl-add="1" class="small">+ Add line</button>
       <div class="note mt"><strong>Which discount?</strong> <strong>Discount on this item</strong> lowers the price of one product only, for example 50 off the shirt. <strong>Discount on the whole order</strong> comes off the total, like a coupon or rounding down. You rarely need both.</div>
       <div class="formgrid mt">${selectF('Sales channel', 'channel', CHANNELS.filter(x => x !== 'Exchange' && x !== 'In-store'), 'Phone')}${selectF('Campaign', 'campaignId', [['', 'Unattributed'], ...Repo.all('campaigns').filter(x => !x.closed).map(x => [x.id, x.name])])}${selectF('Payment', 'paymentMethod', ['COD', 'InstaPay', 'Card', 'Mobile wallet', 'Bank transfer'], 'COD')}${field('Order date', 'date', 'date', today(), `required max="${today()}"`)}${field('Discount on the whole order', 'discount', 'number', 0, 'min="0" step="1" data-dl-total="1"')}${field('Delivery fee charged', 'deliveryFee', 'number', 0, 'min="0" step="1" data-dl-total="1"')}${textF('Internal note (optional)', 'note', '', 'maxlength="500"')}</div><p class="draft-total" id="draftTotal"></p>`, async f => {
@@ -164,17 +165,17 @@ const A = {
   shipModal(ids) {
     ids = (Array.isArray(ids) ? ids : [ids]).map(Number); const many = ids.length > 1;
     if (!ids.length) return toast('Select one or more orders first.', 'bad');
-    const choice = (v, t, sub, on) => `<label class="choice"><input type="radio" name="then" value="${v}" ${on ? 'checked' : ''}><span><strong>${t}</strong><small>${sub}</small></span></label>`;
-    modal(many ? `Ship ${ids.length} orders` : `Ship order #${ids[0]}`, `${note('Only Ready orders can be shipped: packed, with stock reserved. Any other order is skipped and explained.')}<div class="formgrid">${selectF('Fulfillment', 'mode', [['driver', 'Private delivery'], ['courier', 'External courier']], S().defaultFulfillment, 'data-assign-mode="1"')}<label class="field" data-show="driver">Driver<select name="driver">${Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty').map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.availability)} · ${driverStats(d.id).custody} in custody</option>`).join('')}</select></label><label class="field" data-show="courier">Courier<select name="courier">${Repo.all('couriers').filter(c => c.active !== false).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>${many ? '' : '<label class="field" data-show="courier">Tracking no. (optional)<input name="tracking" maxlength="60"></label>'}</div>
-      <h3 class="mt">What happens now?</h3><div class="choices">${choice('assigned', 'Wait for pickup', 'The carrier collects the parcel later. Record the pickup when they do.')}${choice('picked', 'Picked up now', 'The carrier is taking the parcel now. Stock is deducted.', true)}${choice('out', 'Picked up and out for delivery', 'The driver leaves with it right away.')}</div>
+    modal(many ? `Ship ${ids.length} orders` : `Ship order #${ids[0]}`, `${note('Only Ready orders can be shipped: packed, with stock reserved. Any other order is skipped and explained.')}<div class="formgrid">${selectF('Fulfillment', 'mode', [['driver', 'Private delivery'], ['courier', 'External courier']], S().defaultFulfillment, 'data-assign-mode="1"')}<label class="field" data-show="driver">Driver<select name="driver">${Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty').map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.availability)} · ${driverStats(d.id).custody} in custody</option>`).join('')}</select></label><label class="field" data-show="courier">Courier<select name="courier">${Repo.all('couriers').filter(c => c.active !== false).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>${many ? '' : '<label class="field" data-show="courier">Tracking no. (optional)<input name="tracking" maxlength="60"></label>'}${field(many ? 'Commission per order' : 'Commission', 'cost', 'number', '', 'min="0" step="0.01" required')}</div><p class="inlinehelp">The carrier takes the parcel now and stock is deducted. The commission is a shipping cost. A driver keeps it from the cash they collect, when you receive their cash.</p>
       <label class="checkrow mt"><input type="checkbox" name="print"> Print shipping labels afterwards</label>`, async f => {
       const r = [], done = [];
-      for (const id of ids) { try { await Commands.shipOrder(id, f.mode, f.mode === 'driver' ? f.driver : f.courier, { tracking: f.tracking, then: f.then }); ui.selected.delete(id); done.push(id); r.push(null); } catch (e) { r.push(many && !e.message.startsWith('#') ? `#${id}: ${e.message}` : e.message); } }
+      for (const id of ids) { try { await Commands.shipOrder(id, f.mode, f.mode === 'driver' ? f.driver : f.courier, { tracking: f.tracking, then: f.mode === 'driver' ? 'out' : 'picked', cost: f.cost }); ui.selected.delete(id); done.push(id); r.push(null); } catch (e) { r.push(many && !e.message.startsWith('#') ? `#${id}: ${e.message}` : e.message); } }
       if (!many && r[0]) fail(r[0]);
       if (f.print && done.length) printDocs(done, 'label', printPref().size);
       closeModal(); bulkReport('shipped', r); return false;
     }, many ? 'Ship orders' : 'Ship');
-    syncAssign();
+    /* Commission follows the carrier: the driver fee setting, or the courier's shipping rate. */
+    modalLive = ev => { const fm = document.getElementById('modalForm'); if (!fm || (ev && !['mode', 'courier'].includes(ev.target.name))) return; fm.elements.cost.value = fm.elements.mode.value === 'driver' ? Number(S().driverFee) || 0 : Repo.get('couriers', fm.elements.courier.value)?.shipRate ?? 0; };
+    syncAssign(); modalLive();
   },
   printModal(ids, kind) {
     ids = (Array.isArray(ids) ? ids : [ids]).map(Number).filter(id => orderOf(id));
@@ -254,7 +255,8 @@ const A = {
   ofd(id) { closeModal(); run(() => Commands.setDeliveryStatus(id, 'Out for Delivery', { note: 'Out for delivery' }), 'Marked out for delivery.'); },
   returnStart(id) { closeModal(); run(() => Commands.startReturn(id), 'Return started. The parcel stays in carrier custody until received at the warehouse.'); },
   /* Receiving an undelivered parcel: why it came back, and who pays the shipping. */
-  receive(id) {
+  returnedModal(id) { A.receive(id, true); },
+  receive(id, quick = false) {
     const d = Repo.get('deliveries', id), o = orderOf(d.orderId), partial = d.items.some(i => i.delivered > 0), suggested = o.deliveryFee || d.cost || 0;
     const opt = (v, t, sub, on) => `<label class="choice"><input type="radio" name="shipping" value="${v}" ${on ? 'checked' : ''} ${v === 'waived' && partial ? 'disabled' : ''}><span><strong>${t}</strong><small>${sub}</small></span></label>`;
     modal(`Receive ${esc(d.id)} at the warehouse`, `${note(`Undelivered units go back into stock. Order #${o.id} · ${esc(carrierName(d))}.`)}
@@ -266,7 +268,7 @@ const A = {
       </div>
       <div class="formgrid mt" id="feeFields" hidden>${field('Shipping fee charged to the customer', 'fee', 'number', suggested || '', 'min="0.01" step="0.01"')}${selectF('Has the customer paid it?', 'paidTo', [['unpaid', 'Not yet, they owe it'], ['carrier', `Yes, to ${carrierName(d)} in cash`], ['business', 'Yes, directly to the business']])}</div>
       ${textF('Note (optional)', 'note', '', 'maxlength="200"')}`,
-      async f => { await Commands.receiveAtWarehouse(id, f.note, { reason: f.reason, shipping: f.shipping, fee: f.shipping === 'customer' ? Number(f.fee) : undefined, paidTo: f.paidTo }); toast('Received at the warehouse. Undelivered units restocked.'); }, 'Receive parcel');
+      async f => { const outcome = { reason: f.reason, shipping: f.shipping, fee: f.shipping === 'customer' ? Number(f.fee) : undefined, paidTo: f.paidTo, note: f.note }; if (quick) { if (!f.reason) fail('Choose why it came back.'); await Commands.quickReturn(id, outcome); } else await Commands.receiveAtWarehouse(id, f.note, outcome); toast('Received at the warehouse. Undelivered units restocked.'); }, quick ? 'Record return' : 'Receive parcel');
     modalLive = () => { const form = document.getElementById('modalForm'), on = form.elements.shipping.value === 'customer', box = document.getElementById('feeFields'); box.hidden = !on; box.querySelector('[name=fee]').required = on; };
     modalLive();
   },
@@ -282,19 +284,22 @@ const A = {
   },
   failModal(id) { modal(`Failed attempt · ${id}`, `${note('The parcel stays in the carrier\'s custody. It only returns to stock when received at the warehouse.')}<div class="formgrid">${selectF('Reason', 'reason', FAILURE_REASONS)}${field('Note', 'note', 'text', '', 'maxlength="200"')}</div>`, async f => { await Commands.setDeliveryStatus(id, 'Failed Attempt', { reason: f.reason, note: f.note }); toast('Failed attempt recorded.'); }, 'Record attempt'); },
   retryModal(id) { modal(`Schedule retry · ${id}`, `<div class="formgrid">${field('Retry date', 'date', 'date', dayShift(today(), 1), `required min="${today()}"`)}${field('Note', 'note', 'text', '', 'maxlength="200"')}</div>`, async f => { await Commands.setDeliveryStatus(id, 'Retry Scheduled', { retryAt: new Date(f.date + 'T18:00:00Z').toISOString(), note: f.note }); toast('Retry scheduled.'); }, 'Schedule'); },
-  deliverModal(id) {
+  deliveredModal(id) { A.deliverModal(id, true); },
+  deliverModal(id, quick = false) {
     const d = Repo.get('deliveries', id), o = orderOf(d.orderId), ca = calc(o), units = new Map(linesOf(o).map(l => [l.id, netUnit(l, o)])), isCOD = o.paymentMethod === 'COD' || ca.paid < ca.value;
     const expectFor = q => round2(Math.max(0, d.items.reduce((s, it) => s + (Number(q[it.lineId]) || 0) * units.get(it.lineId), 0) + (d.items.some(it => Number(q[it.lineId]) > 0) ? (o.deliveryFee || 0) : 0) - ca.paid));
-    modal(`Record delivery · ${id}`, `<h3>Delivered quantities</h3>${d.items.map(it => `<label class="checkrow between"><span>${esc(it.sku)} <small>of ${it.qty}</small></span><input class="qtyinput" type="number" min="0" max="${it.qty}" step="1" name="q${it.lineId}" value="${it.qty}" data-deliver="1" aria-label="Delivered quantity for ${esc(it.sku)}"></label>`).join('')}
+    modal(`Record delivery · ${id}`, `<div class="choices"><label class="choice"><input type="radio" name="full" value="1" checked data-deliver="1"><span><strong>Delivered in full</strong><small>The customer kept every item.</small></span></label><label class="choice"><input type="radio" name="full" value="" data-deliver="1"><span><strong>Partly delivered</strong><small>The customer kept some items. The rest come back.</small></span></label></div><div id="qtyBox" class="mt"><h3>Delivered quantities</h3>${d.items.map(it => `<label class="checkrow between"><span>${esc(it.sku)} <small>of ${it.qty}</small></span><input class="qtyinput" type="number" min="0" max="${it.qty}" step="1" name="q${it.lineId}" value="${it.qty}" data-deliver="1" aria-label="Delivered quantity for ${esc(it.sku)}"></label>`).join('')}</div>
       <h3 class="mt">Customer payment</h3><p class="subtitle" id="expectHint"></p><div class="formgrid mt">${selectF('Method', 'method', [...PAYMENT_METHODS, 'Not collected'], isCOD ? 'Cash' : 'Not collected', 'data-deliver="1"')}${field('Amount collected', 'amount', 'number', 0, 'min="0" step="0.01" data-amount="1"')}<label class="field" id="refWrap">Transaction reference<input name="ref" maxlength="60"></label>${field('Reason (required for partial delivery or short payment)', 'reason', 'text', '', 'maxlength="200"')}${field('Note', 'note', 'text', '', 'maxlength="200"')}</div><p class="inlinehelp">Delivered does not mean paid. Only cash increases what ${esc(carrierName(d))} holds. Non-cash goes to the business directly.</p>`, async f => {
       const quantities = {}; for (const it of d.items) quantities[it.lineId] = Number(f['q' + it.lineId]);
       const method = f.method, amount = Number(f.amount) || 0;
       if (method !== 'Not collected' && amount <= 0 && expectFor(quantities) > 0) fail('Enter the amount collected, or choose Not collected.');
-      await Commands.deliver(id, { quantities, reason: f.reason, note: f.note, collection: method === 'Not collected' ? { amount: 0, shortReason: f.reason || 'Not collected at delivery' } : { amount, method, ref: f.ref } });
+      await Commands[quick ? 'quickDeliver' : 'deliver'](id, { quantities, reason: f.reason, note: f.note, collection: method === 'Not collected' ? { amount: 0, shortReason: f.reason || 'Not collected at delivery' } : { amount, method, ref: f.ref } });
       toast('Delivery recorded. Revenue recognized for delivered units.');
     }, 'Record delivery');
     modalLive = (ev) => {
-      const fm = document.getElementById('modalForm'), q = {}; d.items.forEach(it => q[it.lineId] = fm.elements['q' + it.lineId].value);
+      const fm = document.getElementById('modalForm'), q = {}, full = fm.elements.full.value === '1';
+      document.getElementById('qtyBox').hidden = full; if (full) d.items.forEach(it => { fm.elements['q' + it.lineId].value = it.qty; });
+      d.items.forEach(it => q[it.lineId] = fm.elements['q' + it.lineId].value);
       const exp = expectFor(q), method = fm.elements.method.value; document.getElementById('expectHint').textContent = `Due for delivered items: ${m(exp)}${ca.paid ? ` (after ${m(ca.paid)} already paid)` : ''}`;
       if (!ev || ev.target.dataset.deliver) fm.elements.amount.value = method === 'Not collected' ? 0 : exp;
       fm.elements.amount.disabled = method === 'Not collected'; document.getElementById('refWrap').hidden = method === 'Cash' || method === 'Not collected';
@@ -313,22 +318,23 @@ const A = {
     const rows = Repo.by('deliveries', 'carrierKey', carrierKey('driver', driverId)).map(d => ({ d, left: deliveryCash(d).unhanded })).filter(x => x.left > 0).sort((a, b) => (a.d.completedAt || a.d.assignedAt).localeCompare(b.d.completedAt || b.d.assignedAt));
     if (!rows.length || c.outstanding <= 0) return toast(`${dr.name} holds no cash to receive.`);
     const split = amt => { let room = round2(Math.min(Math.max(0, amt), c.outstanding)); return rows.map(x => { const a = round2(Math.min(room, x.left)); room = round2(room - a); return a; }); };
-    const def = split(c.outstanding), n = Repo.count('handovers', 'driverId', driverId) + 1;
+    const owed = Math.min(driverCommissionOwed(driverId), c.outstanding), def = split(c.outstanding - owed), n = Repo.count('handovers', 'driverId', driverId) + 1;
     modal(`Receive cash · ${esc(dr.name)}`, `<div class="cash-hero"><span><small>Holding now</small><strong>${m(c.outstanding)}</strong></span><small>From ${rows.length} deliveries, after approved expenses and refunds</small></div>
-      <div class="formgrid mt">${field('Amount you counted and received', 'amount', 'number', c.outstanding, `min="0.01" max="${c.outstanding}" step="0.01" required data-amount="1"`)}${field('Received by', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Receipt reference', 'ref', 'text', `HO-${driverId}-${today().replaceAll('-', '')}-${n}`, 'required maxlength="40"')}</div>
+      <div class="formgrid mt">${field('Commission the driver keeps', 'commission', 'number', owed, `min="0" max="${owed}" step="0.01" data-amount="1"`)}${field('Amount you counted and received', 'amount', 'number', round2(c.outstanding - owed), `min="0" max="${c.outstanding}" step="0.01" required data-amount="1"`)}${field('Received by', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Receipt reference', 'ref', 'text', `HO-${driverId}-${today().replaceAll('-', '')}-${n}`, 'required maxlength="40"')}</div>
       <p class="draft-total" id="allocTotal"></p>
       <details class="whynot mt"><summary>Which deliveries this cash is for</summary><p class="inlinehelp">Filled in for you, oldest delivery first. Change it only if the driver says the cash is for different deliveries.</p><div class="tablewrap mt"><table><thead><tr><th>Delivery</th><th>Order</th><th class="number">Cash not handed over</th><th class="number">From this cash</th></tr></thead><tbody>${rows.map((x, i) => `<tr><td>${x.d.id}</td><td>#${x.d.orderId}</td><td class="number">${m(x.left)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" max="${x.left}" step="0.01" value="${def[i]}" data-alloc="${x.d.id}" aria-label="Allocation for ${x.d.id}"></td></tr>`).join('')}</tbody></table></div><div class="formgrid mt">${field('Amount the driver says they handed (optional)', 'declared', 'number', '', 'min="0" step="0.01"')}</div><p class="inlinehelp">If the driver declares more than you counted, a discrepancy is opened for review.</p></details>`, async f => {
       const allocations = [...document.querySelectorAll('#modalForm [data-alloc]')].map(el => ({ deliveryId: el.dataset.alloc, amount: Number(el.value) || 0 }));
       const t = round2(sum(allocations, a => a.amount)), amt = round2(Number(f.amount) || 0);
       if (Math.abs(t - amt) > 0.009) fail(`The deliveries add up to ${m(t)}, but you entered ${m(amt)}. Make them match under "Which deliveries this cash is for".`);
-      await Commands.recordHandover({ driverId, ref: f.ref, at: dateToIso(f.date), receivedBy: f.receivedBy, allocations, declared: Number(f.declared) || null }); toast(`Cash received from ${dr.name}: ${m(amt)}.`);
+      await Commands.recordHandover({ driverId, ref: f.ref, at: dateToIso(f.date), receivedBy: f.receivedBy, allocations, declared: Number(f.declared) || null, commission: Number(f.commission) || 0 }); toast(`Cash received from ${dr.name}: ${m(amt)}.`);
     }, 'Receive cash', { wide: true });
     modalLive = ev => {
       const fm = document.getElementById('modalForm'); if (!fm) return;
       const amt = Number(fm.elements.amount.value) || 0;
+      if (ev?.target?.name === 'commission') { fm.elements.amount.value = round2(Math.max(0, c.outstanding - (Number(fm.elements.commission.value) || 0))); return modalLive(); }
       if (!ev || ev.target?.name === 'amount') { const parts = split(amt); fm.querySelectorAll('[data-alloc]').forEach((el, i) => { el.value = parts[i]; }); }
       const t = allocInputsTotal();
-      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Left with the driver after this</span> <b>${m(c.outstanding - amt)}</b></span>${Math.abs(t - amt) > 0.009 ? `<span class="bd negative"><span>Deliveries add up to</span> <b>${m(t)}</b></span>` : ''}`;
+      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Left with the driver after this</span> <b>${m(round2(c.outstanding - amt - (Number(fm.elements.commission.value) || 0)))}</b></span>${Math.abs(t - amt) > 0.009 ? `<span class="bd negative"><span>Deliveries add up to</span> <b>${m(t)}</b></span>` : ''}`;
     };
     modalLive();
   },
@@ -398,7 +404,7 @@ const A = {
   cancelMO(id) { run(() => Commands.cancelProduction(id), `${id} cancelled.`); },
 
   /* CRM */
-  customerModal(id) { const c = id ? Repo.get('customers', id) : { name: '', phone: '', area: AREAS[0], address: '', deliveryNotes: '', preferredTime: 'Any time', tags: [], altAddresses: [] }; modal(id ? `Edit ${esc(c.name)}` : 'New customer', `<div class="formgrid">${field('Name', 'name', 'text', c.name, 'required maxlength="60"')}${field('Mobile', 'phone', 'tel', c.phone, 'required placeholder="01012345678"')}${selectF('Area', 'area', AREAS, c.area)}${selectF('Preferred delivery time', 'preferredTime', ['Any time', 'Morning', 'Afternoon', 'Evening'], c.preferredTime)}<label class="field full">Address<input name="address" value="${esc(c.address)}" required maxlength="200"></label><label class="field full">Alternate address (optional)<input name="alt" value="${esc(c.altAddresses?.[0] || '')}" maxlength="200"></label>${textF('Delivery instructions', 'deliveryNotes', c.deliveryNotes, 'maxlength="300"')}</div>`, async f => { const r = await Commands.saveCustomer({ id, ...f, tags: c.tags, altAddresses: f.alt ? [f.alt] : [] }); toast('Customer saved.'); if (!id) location.hash = `#/customers/${r.id}`; }); },
+  customerModal(id) { const c = id ? Repo.get('customers', id) : { name: '', phone: '', area: AREAS[0], address: '', deliveryNotes: '', preferredTime: 'Any time', tags: [], altAddresses: [] }; modal(id ? `Edit ${esc(c.name)}` : 'New customer', `<div class="formgrid">${field('Name', 'name', 'text', c.name, 'required maxlength="60"')}${field('Mobile', 'phone', 'tel', c.phone, 'required placeholder="01012345678"')}${govAreaF('area', c.area)}${selectF('Preferred delivery time', 'preferredTime', ['Any time', 'Morning', 'Afternoon', 'Evening'], c.preferredTime)}<label class="field full">Address<input name="address" value="${esc(c.address)}" required maxlength="200"></label><label class="field full">Alternate address (optional)<input name="alt" value="${esc(c.altAddresses?.[0] || '')}" maxlength="200"></label>${textF('Delivery instructions', 'deliveryNotes', c.deliveryNotes, 'maxlength="300"')}</div>`, async f => { const r = await Commands.saveCustomer({ id, ...f, tags: c.tags, altAddresses: f.alt ? [f.alt] : [] }); toast('Customer saved.'); if (!id) location.hash = `#/customers/${r.id}`; }); },
   contactModal(id) { modal('Log a contact', `${note('This records a conversation that already happened. It does not send anything.')}<div class="formgrid">${selectF('Channel', 'channel', ['Phone', 'WhatsApp', 'Instagram', 'Email', 'In person'])}${selectF('Direction', 'direction', ['Outbound', 'Inbound'])}${textF('Summary', 'summary', '', 'required maxlength="500"')}${field('Follow up on (optional)', 'followUp', 'date')}</div>`, async f => { await Commands.logContact({ customerId: id, ...f }); toast('Contact logged. No message was sent.'); }, 'Log contact'); },
   /* staff attendance */
   employeeModal(id) {

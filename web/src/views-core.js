@@ -2,8 +2,8 @@ import { DELIVERY_STATUSES, COLLECTION_OUTCOMES, CHANNELS, tol } from '@commerce
 import { FLAG_LIST } from './ui-kit.js';
 import { Session } from './api.js';
 import { Repo, esc, round2, sum } from '@commerce-os/domain';
-import { Guards, ORDER_STATUSES, S, activeDelivery, allocationOf, availableOf, calc, campaignSpend, carrierKey, carrierName, casesOf, contributionOf, courierSummary, customerOf, dateKey, deliveriesOf, driverCash, isOverdue, ledger, linesOf, money, netUnit, orderOf, orderValue, paymentStatus, paymentsOf, settlementStatus, stockOnHand, totals } from '@commerce-os/domain';
-import { gauge, iconBtn, seg, PRESETS, act, badge, btn, campaignOptions, card, carrierA, courierOptions, custA, dateF, dayShift, delA, driverA, driverOptions, expl, fd, fdt, filteredOrders, grid, heading, icon, initials, skuA, kpi, latestDelivery, lineChart, m, note, orderA, orderFlags, pad, presetRange, rangeLabel, row, search, sel, simpleTable, timeline, today, ui } from './ui-kit.js';
+import { TERMINAL_DELIVERY, govOf, Guards, ORDER_STATUSES, S, activeDelivery, allocationOf, availableOf, calc, campaignSpend, carrierKey, carrierName, casesOf, contributionOf, courierSummary, customerOf, dateKey, deliveriesOf, driverCash, isOverdue, ledger, linesOf, money, netUnit, orderOf, orderValue, paymentStatus, paymentsOf, settlementStatus, stockOnHand, totals } from '@commerce-os/domain';
+import { areaLabel, gauge, iconBtn, seg, PRESETS, act, badge, btn, campaignOptions, card, carrierA, courierOptions, custA, dateF, dayShift, delA, driverA, driverOptions, expl, fd, fdt, filteredOrders, grid, heading, icon, initials, skuA, kpi, latestDelivery, lineChart, m, note, orderA, orderFlags, pad, presetRange, rangeLabel, row, search, sel, simpleTable, timeline, today, ui } from './ui-kit.js';
 import { customerTags, deliveryActions } from './views-ops.js';
 import { A } from './actions.js';
 import { VIEWS, render } from './main.js';
@@ -103,21 +103,27 @@ function exceptionsList(allO) {
   return rows.slice(0, 6).map(({ o, fl }) => `<div class="row"><span>${orderA(o.id)} · ${esc(customerOf(o).name)}</span><span class="tags">${fl.map(x => `<span class="flag">${esc(x)}</span>`).join('')}</span></div>`).join('') + (rows.length > 6 ? `<p class="inlinehelp">${rows.length - 6} more. ${btn('See failed deliveries in Orders →', 'goOrders', { exception: 'Failed delivery' }, { cls: 'link' })}</p>` : '') || '<p class="empty">No open exceptions.</p>';
 }
 
-/* ---------- Orders board: one box per stage, a few orders each with the next-step button. The arrow opens the full filtered list. ---------- */
+/* ---------- Orders board: one box per stage, each order with its next-step buttons. The arrow opens the full list. ---------- */
 function ordersBoard() {
   const all = Repo.all('orders'), newest = (a, b) => b.at.localeCompare(a.at), SHOW = 4;
+  const who = o => `${orderA(o.id)}<br><small>${esc(customerOf(o).name)}</small>`;
   const box = (title, status, list, step) => {
     list.sort(newest);
-    const rows = list.slice(0, SHOW).map(o => `<div class="row"><span>${orderA(o.id)}<br><small>${esc(customerOf(o).name)}</small></span>${step(o)}</div>`).join('');
+    const rows = list.slice(0, SHOW).map(o => `<div class="row"><span>${who(o)}</span><span class="actions">${step(o)}</span></div>`).join('');
     return card(`${title} <span class="board-n">${list.length}</span>`, pad((rows || '<p class="empty">No orders</p>') + (list.length > SHOW ? `<p class="inlinehelp">${btn(`+${list.length - SHOW} more`, 'goOrders', { status }, { cls: 'link' })}</p>` : '')), '', iconBtn('arrow', 'goOrders', { status }, 'See all'), 'board-box');
   };
-  const shipped = all.filter(o => o.status === 'Shipped'), byCarrier = new Map();
-  for (const o of shipped) { const d = activeDelivery(o) || latestDelivery(o), k = d ? d.carrierKey : 'none'; if (!byCarrier.has(k)) byCarrier.set(k, { d, n: 0 }); byCarrier.get(k).n++; }
-  const carrierChip = ({ d, n }) => `<button type="button" class="chip" ${act('goOrders', d ? { status: 'Shipped', [d.mode === 'driver' ? 'driver' : 'courier']: d.carrierId } : { status: 'Shipped' })}><span>${esc(d ? carrierName(d) : 'Unassigned')}</span><b>${n}</b></button>`;
-  return `<div class="grid board">${box('New orders', 'New', all.filter(o => o.status === 'New'), o => btn('Confirm', 'confirmOrder', o.id, { cls: 'small primary', why: Guards.confirm(o) }))}
+  /* Ready to ship: every packed order, filterable by governorate and area, tick several and ship them to one carrier. */
+  const b = ui.board, readyAll = all.filter(o => o.status === 'Ready' && !activeDelivery(o)).sort(newest);
+  const govs = [...new Set(readyAll.map(o => govOf(o.area)).filter(Boolean))], areas = [...new Set(readyAll.filter(o => !b.gov || govOf(o.area) === b.gov).map(o => o.area))];
+  const ready = readyAll.filter(o => (!b.gov || govOf(o.area) === b.gov) && (!b.area || o.area === b.area)), ids = ready.map(o => o.id), picked = ids.filter(id => ui.selected.has(id));
+  const readyBox = card(`Ready to ship <span class="board-n">${readyAll.length}</span>`, `<div class="filters">${sel('board.gov', 'Governorate', [['', 'All'], ...govs])}${sel('board.area', 'Area', [['', 'All'], ...areas])}</div>${pad(ready.length ? `<label class="checkrow"><input type="checkbox" data-selall="${esc(JSON.stringify(ids))}" ${picked.length === ids.length ? 'checked' : ''}> Select all</label><div class="board-scroll">${ready.map(o => `<div class="row"><label class="board-pick"><input type="checkbox" data-sel="${o.id}" ${ui.selected.has(o.id) ? 'checked' : ''} aria-label="Select order ${o.id}"><span>${who(o)}<br><small>${areaLabel(o.area)} · ${esc(o.address)}</small></span></label>${btn('Ship', 'shipModal', [o.id], { cls: 'small primary', why: Guards.assign(o) })}</div>`).join('')}</div><div class="actions mt">${btn(picked.length ? `Ship ${picked.length} selected` : 'Ship selected', 'shipModal', picked, { cls: 'primary', why: picked.length ? '' : 'Tick the orders to ship together.' })}</div>` : '<p class="empty">No orders</p>')}`, '', iconBtn('arrow', 'goOrders', { status: 'Ready' }, 'See all'), 'board-box');
+  const shipped = Repo.all('deliveries').filter(d => d.pickedUpAt && !TERMINAL_DELIVERY.has(d.status)), byCarrier = new Map();
+  for (const d of shipped) { if (!byCarrier.has(d.carrierKey)) byCarrier.set(d.carrierKey, { d, n: 0 }); byCarrier.get(d.carrierKey).n++; }
+  const carrierChip = ({ d, n }) => `<button type="button" class="chip" ${act('goWithCarriers', d.carrierKey)}><span>${esc(carrierName(d))}</span><b>${n}</b></button>`;
+  return `<div class="grid board">${box('New orders', 'New', all.filter(o => o.status === 'New'), o => btn('Cancel', 'cancelModal', o.id, { cls: 'small' }) + btn('Confirm', 'confirmOrder', o.id, { cls: 'small primary', why: Guards.confirm(o) }))}
     ${box('Confirmed orders', 'Confirmed', all.filter(o => o.status === 'Confirmed' || o.status === 'Processing'), o => btn('Mark ready', 'advance', [o.id, 'Ready'], { cls: 'small primary', why: Guards.ready(o) }))}
-    ${box('Ready to ship', 'Ready', all.filter(o => o.status === 'Ready'), o => btn('Ship', 'shipModal', [o.id], { cls: 'small primary', why: Guards.assign(o) }))}
-    ${card(`Shipped orders <span class="board-n">${shipped.length}</span>`, pad(byCarrier.size ? `<div class="chips board-chips">${[...byCarrier.values()].sort((a, b) => b.n - a.n).map(carrierChip).join('')}</div>` : '<p class="empty">No orders</p>'), 'With each courier and driver', iconBtn('arrow', 'goOrders', { status: 'Shipped' }, 'See all'), 'board-box')}</div>`;
+    ${readyBox}
+    ${card(`Shipped orders <span class="board-n">${shipped.length}</span>`, pad(byCarrier.size ? `<div class="chips board-chips">${[...byCarrier.values()].sort((a, b) => b.n - a.n).map(carrierChip).join('')}</div>` : '<p class="empty">No orders</p>'), 'With each courier and driver. Open to record delivered or returned.', iconBtn('arrow', 'goWithCarriers', '', 'See all'), 'board-box')}</div>`;
 }
 
 /* ---------- Orders ---------- */
@@ -126,7 +132,7 @@ function ordersView() {
   const cols = [
     { k: 'sel', label: (shown) => `<input type="checkbox" aria-label="Select all orders on this page" data-selall="${esc(JSON.stringify(shown.map(o => o.id)))}" ${shown.length && shown.every(o => ui.selected.has(o.id)) ? 'checked' : ''}>`, render: o => `<input type="checkbox" aria-label="Select order ${o.id}" data-sel="${o.id}" ${ui.selected.has(o.id) ? 'checked' : ''}>` },
     { k: 'id', label: 'Order', sort: o => o.id, render: o => `${orderA(o.id)}<br><small>${fd(o.at)}</small>` },
-    { k: 'cust', label: 'Customer', sort: o => customerOf(o).name, render: o => { const c = customerOf(o); return `${custA(c)}<br><small>${esc(o.area)}</small>`; } },
+    { k: 'cust', label: 'Customer', sort: o => customerOf(o).name, render: o => { const c = customerOf(o); return `${custA(c)}<br><small>${areaLabel(o.area)}</small>`; } },
     { k: 'items', label: 'Items', render: o => { const ls = linesOf(o); return `${esc(ls[0].name)} × ${ls[0].qty}${ls.length > 1 ? `<br><small>+${ls.length - 1} more line${ls.length > 2 ? 's' : ''}</small>` : `<br><small>${esc(ls[0].sku)}</small>`}`; } },
     { k: 'ch', label: 'Channel / entry / campaign', sort: o => o.channel, render: o => `${esc(o.channel)} <small>· ${esc(o.source)} entry</small><br><small>${o.campaignId ? esc(Repo.get('campaigns', o.campaignId)?.name) : 'Unattributed'}</small>` },
     { k: 'st', label: 'Order status', sort: o => o.status, render: o => badge(o.status) },

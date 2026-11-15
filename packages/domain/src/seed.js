@@ -1,5 +1,5 @@
 import { Clock, Repo, addHours, round2, sum } from './core.js';
-import { AREAS, Commands, DEFAULT_SETTINGS, FAILURE_REASONS, S, calc, carrierKey, courierDeliveryBalance, dateKey, deliveryCash, driverCash, linesOf, postMovement, reservedOf, stockOnHand, totals } from './domain.js';
+import { SEED_AREAS, Commands, DEFAULT_SETTINGS, FAILURE_REASONS, S, calc, carrierKey, courierDeliveryBalance, dateKey, deliveryCash, driverCash, linesOf, postMovement, reservedOf, stockOnHand, totals } from './domain.js';
 /* ==========================================================================
    LAYER 3 · DEMO DATA: fictional records built by running the real commands
    against a simulated clock, so sample data obeys the same rules as live use.
@@ -36,7 +36,7 @@ function seedCustomers(n, rng) {
   const made = [];
   for (let i = 0; i < n; i++) {
     const seqNo = (Repo.data.seq.CUS || 0) + 1, name = `${FIRST[(seqNo - 1) % FIRST.length]} ${LAST[(seqNo * 7) % LAST.length]}`;
-    const area = pick(rng, AREAS), phone = ['010', '011', '012', '015'][seqNo % 4] + String(20000000 + seqNo * 137).slice(0, 8);
+    const area = pick(rng, SEED_AREAS), phone = ['010', '011', '012', '015'][seqNo % 4] + String(20000000 + seqNo * 137).slice(0, 8);
     const c = Commands.saveCustomer({ name, phone, area, address: `${1 + Math.floor(rng() * 90)} ${pick(rng, STREETS)}, ${area}`, deliveryNotes: rng() < .3 ? pick(rng, ['Call before arrival', 'Deliver after 6 pm', 'Leave with the building guard', 'Ring the bell once, baby sleeping']) : '', preferredTime: pick(rng, ['Any time', 'Morning', 'Afternoon', 'Evening']), tags: [] });
     made.push(c);
   }
