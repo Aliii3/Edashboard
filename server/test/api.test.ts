@@ -347,6 +347,12 @@ test('test mode empties the workspace and ending it brings every record back', a
   assert.equal((await call('owner', 'GET', '/api/me')).json().testSince, null);
   assert.equal((await call('owner', 'POST', '/api/admin/test-mode/end', {})).status, 422);
 });
+test('a backup from before a column was added still restores', async () => {
+  const old = JSON.parse(JSON.stringify((await loadAll())!.data));
+  old.tables.boms = old.tables.boms.map(({ buyCost, ...b }: any) => b); old.tables.campaigns = old.tables.campaigns.map(({ closed, ...c }: any) => c);
+  assert.equal((await call('owner', 'POST', '/api/admin/restore', old)).status, 200);
+  const r = (await loadAll())!.data; assert.equal(Number(r.tables.boms[0].buyCost), 0); assert.equal(r.tables.campaigns[0].closed, false);
+});
 test('login attempts are rate limited', async () => {
   let last = 0; for (let i = 0; i < 12; i++) last = (await call(null, 'POST', '/api/auth/login', { email: 'z@t.test', password: 'wrong-password' })).status;
   assert.equal(last, 429);

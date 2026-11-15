@@ -33,16 +33,16 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  await clickBtn('Confirm and reserve');await p.waitForTimeout(60);ok('confirmed',await ev(`orderOf(${oid}).status`)==='Confirmed');
  ok('assign needs ready',(await p.locator('.whynot').first().textContent()).includes('Mark the order Ready first'));
  await clickBtn('Mark ready');await p.waitForTimeout(60);ok('ready straight from confirmed',await ev(`orderOf(${oid}).status`)==='Ready');
- await clickBtn('Assign and ship');await p.waitForSelector('dialog[open]');await p.selectOption('select[name=mode]','driver');await p.selectOption('select[name=driver]','DRV-1');await p.locator('dialog input[name=then][value=assigned]').check();await p.click('dialog button[type=submit]');await p.waitForTimeout(80);
+ await clickBtn('Assign and ship');await p.waitForSelector('dialog[open]');await p.selectOption('select[name=mode]','driver');await p.selectOption('select[name=driver]','DRV-1');ok('no what-happens-now step',await p.locator('dialog input[name=then]').count()===0);await p.click('dialog button[type=submit]');await p.waitForTimeout(80);
  const did=await ev(`activeDelivery(orderOf(${oid})).id`);ok('assigned',!!did);
  ok('driver link',await p.locator('#main a[href="#/drivers/DRV-1"]').count()>0);
  await shot('o-360');
- await clickBtn('Record pickup');await p.waitForTimeout(60);await clickBtn('Out for delivery');await p.waitForTimeout(60);
+ ok('driver has it on assignment',await ev(`Repo.get('deliveries','${did}').status`)==='Out for Delivery');
  await clickBtn('Failed attempt');await p.waitForSelector('dialog[open]');await p.click('dialog button[type=submit]');await p.waitForTimeout(60);
  ok('failed custody',await ev(`Repo.get('deliveries','${did}').custody`)==='driver:DRV-1');
  await clickBtn('Schedule retry');await p.waitForSelector('dialog[open]');await p.click('dialog button[type=submit]');await p.waitForTimeout(60);
  await clickBtn('Out for delivery');await p.waitForTimeout(60);
- await clickBtn('Record delivery');await p.waitForSelector('dialog[open]');await shot('m-deliver');
+ await clickBtn('Record delivery');await p.waitForSelector('dialog[open]');await p.locator('dialog input[name=full][value=""]').check();await p.waitForTimeout(30);await shot('m-deliver');
  const line1=await ev(`linesOf(orderOf(${oid}))[0].id`);
  await p.fill(`input[name="q${line1}"]`,'1');await p.locator(`input[name="q${line1}"]`).blur();await p.waitForTimeout(30);
  const amt=await p.inputValue('input[name=amount]');ok('live expected',Number(amt)===890+350+50,amt);
@@ -54,10 +54,11 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  const heldB=await ev(`driverCash('DRV-1').outstanding`);ok('held 1000',heldB===1000,heldB);
  await p.locator('.tabs button',{hasText:'Cash'}).click();await p.waitForTimeout(40);await shot('d-cash');
  await clickBtn('Receive cash from driver');await p.waitForSelector('dialog[open]');await shot('m-handover');
- await p.fill('input[name=ref]','HO-UI-1');await p.fill('dialog input[name=amount]','600');await p.waitForTimeout(30);ok('split follows amount',Number(await p.locator('[data-alloc]').first().inputValue())===600);await p.click('dialog button[type=submit]');await p.waitForTimeout(80);
- ok('handover partial',await ev(`driverCash('DRV-1').outstanding`)===400);
- await clickBtn('Receive cash from driver');await p.waitForSelector('dialog[open]');await p.fill('input[name=ref]','HO-UI-1');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('dup ref msg',(await p.locator('#formError').innerText()).includes('already exists'));
- await p.fill('input[name=ref]','HO-UI-2');await p.fill('dialog input[name=amount]','5000');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('excess blocked',(await p.locator('#formError').innerText()).length>0,await p.locator('#formError').innerText());await p.click('dialog [data-close]');
+ await p.fill('input[name=ref]','HO-UI-1');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('tick required',(await p.locator('#formError').innerText()).includes('Tick'));
+ const cash1=Number(await p.locator('dialog [data-com]').first().getAttribute('data-cash'));await p.locator('dialog [data-inc]').first().check();
+ await p.locator('dialog [data-com]').first().fill(String(cash1+1));await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('commission above cash blocked',(await p.locator('#formError').innerText()).length>0);
+ await p.locator('dialog [data-com]').first().fill('50');await p.waitForTimeout(30);ok('amount follows ticks and commission',(await p.locator('#allocTotal').innerText()).includes((cash1-50).toLocaleString('en-US')));await p.click('dialog button[type=submit]');await p.waitForSelector('dialog[open]',{state:'hidden'});await p.waitForTimeout(80);
+ ok('handover settles the ticked order',await ev(`driverCash('DRV-1').outstanding`)===heldB-cash1);ok('handover amount less commission',await ev(`Repo.all('handovers').find(h=>h.ref==='HO-UI-1').amount`)===cash1-50);
  // consistency across screens
  await go('#/finance');await p.locator('.tabs button',{hasText:'Driver cash'}).click();await p.waitForTimeout(40);ok('finance shows driver',(await p.locator('#main').innerText()).includes('EGP 400'));
  // Delivery details modal
@@ -78,7 +79,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  await p.locator('th button',{hasText:'Value'}).click();await p.waitForTimeout(50);
  await p.selectOption('[data-f="orders.status"]','');await p.fill('[data-f="orders.q"]','TOT-NAT');await p.waitForTimeout(280);ok('search keeps focus',await ev(()=>document.activeElement?.id==='s-orders.q'));await p.fill('[data-f="orders.q"]','');await p.waitForTimeout(280);
  // bulk
- await p.selectOption('[data-f="orders.status"]','New');await p.waitForTimeout(60);const ids=await p.locator('[data-sel]').count();if(ids){await p.locator('thead input[type=checkbox]').check();await p.waitForTimeout(40);await clickBtn('Confirm');await p.waitForTimeout(120);ok('bulk ran',await ev(()=>ui.selected.size===0))}
+ await p.selectOption('[data-f="orders.status"]','New');await p.waitForTimeout(60);const ids=await p.locator('[data-sel]').count();if(ids){await p.locator('thead input[type=checkbox]').check();await p.waitForTimeout(40);await p.locator('.bulk button',{hasText:'Confirm'}).click();await p.waitForTimeout(120);ok('bulk ran',await ev(()=>ui.selected.size===0))}
  if(await p.locator('dialog[open]').count())await p.click('dialog [data-close]');
  await ev(()=>{ui.orders=blankOrderFilters();render()});
  // CSV import
@@ -92,7 +93,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  // campaign recalculation + empty campaign
  await go('#/campaigns');await p.waitForTimeout(40);const prof=await ev(()=>totals().profit);await p.locator('tr',{hasText:'Winter teaser'}).locator('button',{hasText:'Add spend'}).click();await p.waitForSelector('dialog[open]');await p.fill('input[name=amount]','100');await p.click('dialog button[type=submit]');await p.waitForTimeout(60);ok('empty spend hits profit',Math.abs(await ev(()=>totals().profit)-(prof-100))<.01);await shot('s-campaigns2');
  // courier settlement
- await go('#/finance');await p.locator('.tabs button',{hasText:'Courier reconciliation'}).click();await p.waitForTimeout(40);await clickBtn('Record payment from Bosta');await p.waitForSelector('dialog[open]');await p.fill('input[name=ref]','BST-UI-1');await shot('m-settle');await p.click('dialog button[type=submit]');await p.waitForTimeout(80);ok('settlement',await ev(()=>Repo.count('settlements','ref','BST-UI-1'))===1);
+ await go('#/finance');await p.locator('.tabs button',{hasText:'Courier reconciliation'}).click();await p.waitForTimeout(40);await p.locator('.tabs button',{hasText:'Driver cash'}).click();await p.waitForTimeout(40);await p.locator('tr',{hasText:'Bosta'}).locator('button',{hasText:'Receive payment'}).click();await p.waitForSelector('dialog[open]');await p.locator('dialog [data-inc]').first().check();await p.fill('input[name=ref]','BST-UI-1');await shot('m-settle');await p.click('dialog button[type=submit]');await p.waitForTimeout(80);ok('settlement',await ev(()=>Repo.count('settlements','ref','BST-UI-1'))===1);
  // new driver + availability
  await go('#/shipping');await p.locator('.tabs button',{hasText:'Private delivery'}).click();await clickBtn('+ New driver');await p.waitForSelector('dialog[open]');await p.fill('input[name=name]','Test Driver');await p.fill('input[name=phone]','123');await p.click('dialog button[type=submit]');await p.waitForTimeout(40);ok('phone validated',(await p.locator('#formError').innerText()).includes('Egyptian'));await p.fill('input[name=phone]','01033334444');await p.click('dialog button[type=submit]');await p.waitForTimeout(100);ok('driver made',(await ev(()=>location.hash)).startsWith('#/drivers/DRV-7'));
  // global search
@@ -112,7 +113,7 @@ export async function runUi({chromium,URL,SHOT,PW,chrome}){
  const ns=await ev(()=>Repo.all('orders').length);await p.click('dialog button[type=submit]');await p.waitForTimeout(150);const so=await ev(()=>{const o=Repo.all('orders').at(-1);return {n:Repo.all('orders').length,st:o.status,ch:o.channel,pay:paymentStatus(o)}});ok('store sale',so.n===ns+1&&so.st==='Delivered'&&so.ch==='In-store'&&so.pay==='Paid',JSON.stringify(so));
  // courier statement pasted from Excel ticks the matching delivery
  const cdel=await ev(()=>{const d=Repo.by('deliveries','carrierKey','courier:MYLERZ').find(x=>(x.completedAt||x.returnedAt)&&x.tracking&&Math.abs(courierDeliveryBalance(x).gap)>1);return d&&{id:d.id,t:d.tracking,g:courierDeliveryBalance(d).gap}});
- if(cdel){await go('#/finance');await p.locator('.tabs button',{hasText:'Courier reconciliation'}).click();await p.waitForTimeout(40);await shot('fin-courier');await clickBtn('Record payment from Mylerz');await p.waitForSelector('dialog[open]');await p.locator('dialog summary',{hasText:'Match the courier'}).click();
+ if(cdel){await go('#/finance');await p.locator('.tabs button',{hasText:'Courier reconciliation'}).click();await p.waitForTimeout(40);await shot('fin-courier');await p.locator('.tabs button',{hasText:'Driver cash'}).click();await p.waitForTimeout(40);await p.locator('tr',{hasText:'Mylerz'}).locator('button',{hasText:'Receive payment'}).click();await p.waitForSelector('dialog[open]');await p.locator('dialog summary',{hasText:'Match the courier'}).click();
   await p.fill('dialog textarea[name=stmtText]',`AWB\tCOD amount\n${cdel.t}\t${cdel.g}\nNOPE-1\t50\n`);await p.waitForTimeout(80);const res=await p.locator('#stmtResult').innerText();
   ok('statement matched',/Matched and ticked\s*1/.test(res),res);ok('statement unmatched listed',res.includes('NOPE-1'));ok('only matched ticked',await p.locator('dialog [data-inc]:checked').count()===1);await shot('m-statement');
   await p.fill('dialog input[name=ref]','MYZ-UI-1');await p.click('dialog button[type=submit]');await p.waitForTimeout(150);ok('statement payment saved',await ev(`Math.abs(courierDeliveryBalance(Repo.get('deliveries','${cdel.id}')).gap)<0.01`));}

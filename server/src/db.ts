@@ -114,7 +114,8 @@ export async function replaceAll(c: Client, data: any, version: number) {
     const cols = columns.get(t)!, rows = (data.tables[t] || []).filter((r: any) => !String(r.id).startsWith('base:')), size = Math.floor(60000 / cols.length);
     for (let i = 0; i < rows.length; i += size) {
       const chunk = rows.slice(i, i + size), params: any[] = [], vals: string[] = [];
-      for (const r of chunk) { const start = params.length; params.push(...toParams(t, r)); vals.push(`(${cols.map((_, j) => `$${start + j + 1}`)})`); }
+      /* A record saved before a column existed (old backup, test started before an update) gets the column's default. */
+      for (const r of chunk) { const p = toParams(t, r); vals.push(`(${cols.map((col, j) => r[camel(col.name)] === undefined ? 'DEFAULT' : (params.push(p[j]), `$${params.length}`))})`); }
       await c.query(`INSERT INTO ${q(snake(t))} (${colList(t)}) VALUES ${vals.join(',')}`, params);
     }
   }

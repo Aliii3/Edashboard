@@ -75,6 +75,8 @@ export async function loadScope(c: Client, s: Scope) {
   if (oIds.length) {
     const orders = put('orders', await selectRows(c, 'orders', 'id = ANY($1)', [oIds]));
     for (const t of ['lines', 'deliveries', 'payments', 'cases', 'discrepancies', 'handoverAllocs', 'settlementAllocs']) put(t, await selectRows(c, t, 'order_id = ANY($1)', [oIds]));
+    /* Commission a driver kept on these deliveries reduces their uncleared cash. */
+    put('driverExpenses', await selectRows(c, 'driverExpenses', 'delivery_id = ANY($1)', [[...(tables.deliveries?.keys() || [])]]));
     await byIds('handovers', clean([...(tables.handoverAllocs?.values() || [])].map(a => a.handoverId)));
     await byIds('settlements', clean([...(tables.settlementAllocs?.values() || [])].map(a => a.settlementId)));
     await byIds('customers', clean(orders.map(o => o.customerId)));

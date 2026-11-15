@@ -2,7 +2,7 @@ import { Commands, Session, request, loadSnapshot, pull } from './api.js';
 import { isAr, setLang } from './i18n.js';
 import { ROLES } from '@commerce-os/domain';
 import { Repo, Rule, esc, fail, round2, sum } from '@commerce-os/domain';
-import { driverCommissionOwed, ATTENDANCE_STATUSES, lateMinutes, RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
+import { carrierCharge, ATTENDANCE_STATUSES, lateMinutes, RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
 import { act, areaLabel, govAreaF, badge, blankOrderFilters, btn, carrierA, custA, dayShift, fd, fdt, filteredOrders, grid, kpi, latestDelivery, m, note, orderA, orderSearchText, presetRange, rangeLabel, row, search, setPath, simpleTable, timeline, today, ui } from './ui-kit.js';
 import { custodyLabel, returnRate } from './views-core.js';
 import { deliveryActions } from './views-ops.js';
@@ -100,6 +100,16 @@ function renderDraftLines() {
   const ch = document.getElementById('changeDue');
   if (ch) { const cash = Number(f.elements.cash?.value) || 0, other = f.elements.method2?.value ? Number(f.elements.amount2?.value) || 0 : 0, due = round2(total - other); ch.innerHTML = f.elements.method.value === 'Cash' && cash > 0 ? (cash >= due ? bd('Change to give back', cash - due, 'positive') : bd('Still to pay in cash', due - cash, 'negative')) : ''; }
 }
+/* Receive-cash totals for the ticked orders: commission per order, the rest is received. */
+function handoverTotals() {
+  let n = 0, com = 0, net = 0;
+  for (const el of document.querySelectorAll('#modalForm [data-com]')) {
+    const id = el.dataset.com, on = document.querySelector(`#modalForm [data-inc="${id}"]`).checked, cash = Number(el.dataset.cash), k = Math.min(cash, Math.max(0, Number(el.value) || 0));
+    document.querySelector(`#modalForm [data-net="${id}"]`).textContent = m(round2(cash - k));
+    if (on) { n++; com += k; net += cash - k; }
+  }
+  return { n, com: round2(com), net: round2(net) };
+}
 function allocInputsTotal() { return [...document.querySelectorAll('#modalForm [data-alloc]')].reduce((s, el) => s + (Number(el.value) || 0), 0); }
 
 const A = {
@@ -165,17 +175,15 @@ const A = {
   shipModal(ids) {
     ids = (Array.isArray(ids) ? ids : [ids]).map(Number); const many = ids.length > 1;
     if (!ids.length) return toast('Select one or more orders first.', 'bad');
-    modal(many ? `Ship ${ids.length} orders` : `Ship order #${ids[0]}`, `${note('Only Ready orders can be shipped: packed, with stock reserved. Any other order is skipped and explained.')}<div class="formgrid">${selectF('Fulfillment', 'mode', [['driver', 'Private delivery'], ['courier', 'External courier']], S().defaultFulfillment, 'data-assign-mode="1"')}<label class="field" data-show="driver">Driver<select name="driver">${Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty').map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.availability)} · ${driverStats(d.id).custody} in custody</option>`).join('')}</select></label><label class="field" data-show="courier">Courier<select name="courier">${Repo.all('couriers').filter(c => c.active !== false).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>${many ? '' : '<label class="field" data-show="courier">Tracking no. (optional)<input name="tracking" maxlength="60"></label>'}${field(many ? 'Commission per order' : 'Commission', 'cost', 'number', '', 'min="0" step="0.01" required')}</div><p class="inlinehelp">The carrier takes the parcel now and stock is deducted. The commission is a shipping cost. A driver keeps it from the cash they collect, when you receive their cash.</p>
+    modal(many ? `Ship ${ids.length} orders` : `Ship order #${ids[0]}`, `${note('Only Ready orders can be shipped: packed, with stock reserved. Any other order is skipped and explained.')}<div class="formgrid">${selectF('Fulfillment', 'mode', [['driver', 'Private delivery'], ['courier', 'External courier']], S().defaultFulfillment, 'data-assign-mode="1"')}<label class="field" data-show="driver">Driver<select name="driver">${Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty').map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.availability)} · ${driverStats(d.id).custody} in custody</option>`).join('')}</select></label><label class="field" data-show="courier">Courier<select name="courier">${Repo.all('couriers').filter(c => c.active !== false).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>${many ? '' : '<label class="field" data-show="courier">Tracking no. (optional)<input name="tracking" maxlength="60"></label>'}</div><p class="inlinehelp">The carrier takes the parcel now and stock is deducted. The commission is entered per order when you receive the cash.</p>
       <label class="checkrow mt"><input type="checkbox" name="print"> Print shipping labels afterwards</label>`, async f => {
       const r = [], done = [];
-      for (const id of ids) { try { await Commands.shipOrder(id, f.mode, f.mode === 'driver' ? f.driver : f.courier, { tracking: f.tracking, then: f.mode === 'driver' ? 'out' : 'picked', cost: f.cost }); ui.selected.delete(id); done.push(id); r.push(null); } catch (e) { r.push(many && !e.message.startsWith('#') ? `#${id}: ${e.message}` : e.message); } }
+      for (const id of ids) { try { await Commands.shipOrder(id, f.mode, f.mode === 'driver' ? f.driver : f.courier, { tracking: f.tracking, then: f.mode === 'driver' ? 'out' : 'picked' }); ui.selected.delete(id); done.push(id); r.push(null); } catch (e) { r.push(many && !e.message.startsWith('#') ? `#${id}: ${e.message}` : e.message); } }
       if (!many && r[0]) fail(r[0]);
       if (f.print && done.length) printDocs(done, 'label', printPref().size);
       closeModal(); bulkReport('shipped', r); return false;
     }, many ? 'Ship orders' : 'Ship');
-    /* Commission follows the carrier: the driver fee setting, or the courier's shipping rate. */
-    modalLive = ev => { const fm = document.getElementById('modalForm'); if (!fm || (ev && !['mode', 'courier'].includes(ev.target.name))) return; fm.elements.cost.value = fm.elements.mode.value === 'driver' ? Number(S().driverFee) || 0 : Repo.get('couriers', fm.elements.courier.value)?.shipRate ?? 0; };
-    syncAssign(); modalLive();
+    syncAssign();
   },
   printModal(ids, kind) {
     ids = (Array.isArray(ids) ? ids : [ids]).map(Number).filter(id => orderOf(id));
@@ -285,6 +293,17 @@ const A = {
   failModal(id) { modal(`Failed attempt · ${id}`, `${note('The parcel stays in the carrier\'s custody. It only returns to stock when received at the warehouse.')}<div class="formgrid">${selectF('Reason', 'reason', FAILURE_REASONS)}${field('Note', 'note', 'text', '', 'maxlength="200"')}</div>`, async f => { await Commands.setDeliveryStatus(id, 'Failed Attempt', { reason: f.reason, note: f.note }); toast('Failed attempt recorded.'); }, 'Record attempt'); },
   retryModal(id) { modal(`Schedule retry · ${id}`, `<div class="formgrid">${field('Retry date', 'date', 'date', dayShift(today(), 1), `required min="${today()}"`)}${field('Note', 'note', 'text', '', 'maxlength="200"')}</div>`, async f => { await Commands.setDeliveryStatus(id, 'Retry Scheduled', { retryAt: new Date(f.date + 'T18:00:00Z').toISOString(), note: f.note }); toast('Retry scheduled.'); }, 'Schedule'); },
   deliveredModal(id) { A.deliverModal(id, true); },
+  /* Several parcels delivered in full, each with the cash due collected. */
+  bulkDeliveredModal(orderIds) {
+    const ds = orderIds.map(id => activeDelivery(orderOf(id))).filter(d => d && !['Partially Delivered', 'Return in Transit'].includes(d.status));
+    if (!ds.length) return toast('Tick the delivered orders first.', 'bad');
+    const due = sum(ds, expectedFromCustomer);
+    modal(`Mark ${ds.length} orders delivered`, `<p>Each order is recorded as delivered in full, with the cash due collected by the carrier.</p>${row('Cash due in total', m(due))}<p class="inlinehelp">For a partial delivery or a different amount, use Delivered on that order instead.</p>`, async () => {
+      const r = [];
+      for (const d of ds) { const exp = expectedFromCustomer(d); try { await Commands.quickDeliver(d.id, { quantities: Object.fromEntries(d.items.map(i => [i.lineId, i.qty])), collection: exp > 0 ? { amount: exp, method: 'Cash' } : undefined }); ui.selected.delete(d.orderId); r.push(null); } catch (e) { r.push(`#${d.orderId}: ${e.message}`); } }
+      closeModal(); bulkReport('delivered', r); return false;
+    }, 'Mark delivered');
+  },
   deliverModal(id, quick = false) {
     const d = Repo.get('deliveries', id), o = orderOf(d.orderId), ca = calc(o), units = new Map(linesOf(o).map(l => [l.id, netUnit(l, o)])), isCOD = o.paymentMethod === 'COD' || ca.paid < ca.value;
     const expectFor = q => round2(Math.max(0, d.items.reduce((s, it) => s + (Number(q[it.lineId]) || 0) * units.get(it.lineId), 0) + (d.items.some(it => Number(q[it.lineId]) > 0) ? (o.deliveryFee || 0) : 0) - ca.paid));
@@ -315,29 +334,30 @@ const A = {
   /* Receiving cash from a driver: type the amount counted; it is matched to their oldest deliveries. */
   handoverModal(driverId) {
     const dr = Repo.get('drivers', driverId), c = driverCash(driverId);
-    const rows = Repo.by('deliveries', 'carrierKey', carrierKey('driver', driverId)).map(d => ({ d, left: deliveryCash(d).unhanded })).filter(x => x.left > 0).sort((a, b) => (a.d.completedAt || a.d.assignedAt).localeCompare(b.d.completedAt || b.d.assignedAt));
-    if (!rows.length || c.outstanding <= 0) return toast(`${dr.name} holds no cash to receive.`);
-    const split = amt => { let room = round2(Math.min(Math.max(0, amt), c.outstanding)); return rows.map(x => { const a = round2(Math.min(room, x.left)); room = round2(room - a); return a; }); };
-    const owed = Math.min(driverCommissionOwed(driverId), c.outstanding), def = split(c.outstanding - owed), n = Repo.count('handovers', 'driverId', driverId) + 1;
-    modal(`Receive cash · ${esc(dr.name)}`, `<div class="cash-hero"><span><small>Holding now</small><strong>${m(c.outstanding)}</strong></span><small>From ${rows.length} deliveries, after approved expenses and refunds</small></div>
-      <div class="formgrid mt">${field('Commission the driver keeps', 'commission', 'number', owed, `min="0" max="${owed}" step="0.01" data-amount="1"`)}${field('Amount you counted and received', 'amount', 'number', round2(c.outstanding - owed), `min="0" max="${c.outstanding}" step="0.01" required data-amount="1"`)}${field('Received by', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Receipt reference', 'ref', 'text', `HO-${driverId}-${today().replaceAll('-', '')}-${n}`, 'required maxlength="40"')}</div>
-      <p class="draft-total" id="allocTotal"></p>
-      <details class="whynot mt"><summary>Which deliveries this cash is for</summary><p class="inlinehelp">Filled in for you, oldest delivery first. Change it only if the driver says the cash is for different deliveries.</p><div class="tablewrap mt"><table><thead><tr><th>Delivery</th><th>Order</th><th class="number">Cash not handed over</th><th class="number">From this cash</th></tr></thead><tbody>${rows.map((x, i) => `<tr><td>${x.d.id}</td><td>#${x.d.orderId}</td><td class="number">${m(x.left)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" max="${x.left}" step="0.01" value="${def[i]}" data-alloc="${x.d.id}" aria-label="Allocation for ${x.d.id}"></td></tr>`).join('')}</tbody></table></div><div class="formgrid mt">${field('Amount the driver says they handed (optional)', 'declared', 'number', '', 'min="0" step="0.01"')}</div><p class="inlinehelp">If the driver declares more than you counted, a discrepancy is opened for review.</p></details>`, async f => {
-      const allocations = [...document.querySelectorAll('#modalForm [data-alloc]')].map(el => ({ deliveryId: el.dataset.alloc, amount: Number(el.value) || 0 }));
-      const t = round2(sum(allocations, a => a.amount)), amt = round2(Number(f.amount) || 0);
-      if (Math.abs(t - amt) > 0.009) fail(`The deliveries add up to ${m(t)}, but you entered ${m(amt)}. Make them match under "Which deliveries this cash is for".`);
-      await Commands.recordHandover({ driverId, ref: f.ref, at: dateToIso(f.date), receivedBy: f.receivedBy, allocations, declared: Number(f.declared) || null, commission: Number(f.commission) || 0 }); toast(`Cash received from ${dr.name}: ${m(amt)}.`);
+    const rows = Repo.by('deliveries', 'carrierKey', carrierKey('driver', driverId)).map(d => ({ d, cash: deliveryCash(d) })).filter(x => x.cash.unhanded > 0).sort((a, b) => (a.d.completedAt || a.d.assignedAt).localeCompare(b.d.completedAt || b.d.assignedAt));
+    if (!rows.length) return toast(`${dr.name} holds no cash to receive.`);
+    const n = Repo.count('handovers', 'driverId', driverId) + 1;
+    /* Tick the orders settled today. Each keeps its own commission; what you receive is calculated. */
+    const row = ({ d, cash }) => { const done = cash.kept > 0, def = done ? 0 : Math.min(carrierCharge(d), cash.unhanded); return `<tr><td><input type="checkbox" data-inc="${d.id}" aria-label="Settle order ${d.orderId}"></td><td>#${d.orderId}<br><small>${esc(d.id)} · ${esc(d.status)}</small></td><td>${esc(customerOf(orderOf(d.orderId)).name)}</td><td class="number">${m(cash.unhanded)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" max="${cash.unhanded}" step="0.01" value="${def}" data-com="${d.id}" data-cash="${cash.unhanded}" data-amount="1" ${done ? 'disabled title="Commission already kept on this order"' : ''} aria-label="Commission on order ${d.orderId}"></td><td class="number" data-net="${d.id}"></td></tr>`; };
+    modal(`Receive cash · ${esc(dr.name)}`, `<div class="cash-hero"><span><small>Holding now</small><strong>${m(c.outstanding)}</strong></span><small>From ${rows.length} orders</small></div>
+      <div class="tablewrap mt"><table><thead><tr><th><input type="checkbox" data-allinc="1" aria-label="Tick every order"></th><th>Order</th><th>Customer</th><th class="number">Cash with driver</th><th class="number">Driver commission</th><th class="number">You receive</th></tr></thead><tbody>${rows.map(row).join('')}</tbody></table></div>
+      <p class="draft-total mt" id="allocTotal"></p>
+      <div class="formgrid mt">${field('Received by', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Receipt reference', 'ref', 'text', `HO-${driverId}-${today().replaceAll('-', '')}-${n}`, 'required maxlength="40"')}${field('Amount the driver says they handed (optional)', 'declared', 'number', '', 'min="0" step="0.01"')}</div><p class="inlinehelp">The commission is the driver's charge for that order and is booked as shipping cost. If the driver declares more than you receive, a discrepancy is opened for review.</p>`, async f => {
+      const picked = [...document.querySelectorAll('#modalForm [data-inc]:checked')].map(el => el.dataset.inc);
+      if (!picked.length) fail('Tick the orders the driver is settling.');
+      const allocations = picked.map(id => ({ deliveryId: id, commission: Number(document.querySelector(`#modalForm [data-com="${id}"]`).value) || 0 }));
+      await Commands.recordHandover({ driverId, ref: f.ref, at: dateToIso(f.date), receivedBy: f.receivedBy, allocations, declared: Number(f.declared) || null });
+      toast(`Cash received from ${dr.name}: ${m(handoverTotals().net)}.`);
     }, 'Receive cash', { wide: true });
     modalLive = ev => {
       const fm = document.getElementById('modalForm'); if (!fm) return;
-      const amt = Number(fm.elements.amount.value) || 0;
-      if (ev?.target?.name === 'commission') { fm.elements.amount.value = round2(Math.max(0, c.outstanding - (Number(fm.elements.commission.value) || 0))); return modalLive(); }
-      if (!ev || ev.target?.name === 'amount') { const parts = split(amt); fm.querySelectorAll('[data-alloc]').forEach((el, i) => { el.value = parts[i]; }); }
-      const t = allocInputsTotal();
-      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Left with the driver after this</span> <b>${m(round2(c.outstanding - amt - (Number(fm.elements.commission.value) || 0)))}</b></span>${Math.abs(t - amt) > 0.009 ? `<span class="bd negative"><span>Deliveries add up to</span> <b>${m(t)}</b></span>` : ''}`;
+      if (ev?.target?.dataset?.allinc) fm.querySelectorAll('[data-inc]').forEach(x => { x.checked = ev.target.checked; });
+      const t = handoverTotals();
+      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Orders ticked</span> <b>${t.n}</b></span><span class="bd"><span>Commission</span> <b>${m(t.com)}</b></span><span class="bd total"><span>Amount you receive</span> <b>${m(t.net)}</b></span>`;
     };
     modalLive();
   },
+
   expenseDriverModal(driverId) {
     modal('Driver expense', `${note('An expense counts once in profit, when approved. Marking it as paid from collected cash only reduces what the driver owes back. Delivery fee payouts are already in delivery costs, so they only change cash custody.')}<div class="formgrid">${selectF('Category', 'category', DRIVER_EXPENSE_CATS)}${field('Amount', 'amount', 'number', '', 'min="0.01" step="0.01" required')}<label class="checkrow"><input type="checkbox" name="paidFromCash"> Driver paid this from collected cash</label>${field('Note', 'note', 'text', '', 'maxlength="200"')}</div>`, async f => { const id = await Commands.addDriverExpense({ driverId, category: f.category, amount: Number(f.amount), paidFromCash: !!f.paidFromCash, note: f.note }); toast(`${id} submitted for approval.`); }, 'Submit');
   },
@@ -353,17 +373,16 @@ const A = {
     const rows = Repo.by('deliveries', 'carrierKey', carrierKey('courier', courierId)).filter(d => d.completedAt || d.returnedAt).map(d => ({ d, b: courierDeliveryBalance(d) })).filter(x => pay ? x.b.gap < -0.001 : Math.abs(x.b.gap) > 0.001).sort((a, b) => (a.d.completedAt || a.d.returnedAt).localeCompare(b.d.completedAt || b.d.returnedAt)).slice(0, 500);
     if (!rows.length) return toast(pay ? `You don't owe ${cr.name} anything.` : `Nothing outstanding from ${cr.name}.`);
     stmt = null; stmtCtx = { courierId };
-    modal(pay ? `Pay ${esc(cr.name)}` : `Payment from ${esc(cr.name)}`, `${note(pay ? 'Tick the shipments this payment covers. Each one is filled in with what you still owe the courier: their shipping, return and COD charges less any customer cash they kept.' : 'Tick the deliveries this payment covers. Each one is filled in with what the courier should send you: the customer\'s cash less their shipping, return and COD charges. To tick them for you, open "Match the courier\'s statement" below.')}
-      <div class="formgrid">${field(pay ? 'Amount paid' : 'Amount received', 'received', 'number', '', `step="0.01" data-amount="1" placeholder="${pay ? 'The bank transfer or cash you paid' : 'From the bank transfer or cash'}"`)}${field('Payment reference', 'ref', 'text', '', 'required maxlength="40"')}${field(pay ? 'Date paid' : 'Date received', 'date', 'date', today(), `required max="${today()}"`)}</div>
+    modal(pay ? `Pay ${esc(cr.name)}` : `Payment from ${esc(cr.name)}`, `${note(pay ? 'Tick the orders this payment covers. Each one shows what you still owe the courier: their commission less any customer cash they kept.' : 'Tick the orders this payment covers, or let "Match the courier\'s statement" tick them. Each order has its own courier commission. What you receive is calculated.')}
+      <div class="formgrid">${field('Payment reference', 'ref', 'text', '', 'required maxlength="40"')}${field(pay ? 'Date paid' : 'Date received', 'date', 'date', today(), `required max="${today()}"`)}</div>
       ${pay ? '' : `<details class="whynot mt"><summary>Match the courier's statement</summary><p class="inlinehelp">Export the statement from the courier's portal as CSV, or copy the rows in Excel and paste them here with the header row. Rows are matched by tracking number, delivery ID or order number.</p>
         <div class="formgrid mt"><label class="field">Statement file (.csv)<input type="file" id="stmtFile" accept=".csv,.tsv,.txt,text/csv"></label><label class="field">Or paste the rows<textarea name="stmtText" rows="3" data-mi="1" dir="auto"></textarea></label></div>
         <div class="formgrid mt" id="stmtCols" hidden>${selectF('Column with the tracking or order number', 'refCol', [], '', 'data-stmt="1"')}${selectF('Column with the amount paid to you', 'amtCol', [], '', 'data-stmt="1"')}</div><div id="stmtResult" class="mt"></div></details>`}
-      <div class="tablewrap mt"><table><thead><tr><th><input type="checkbox" data-allinc="1" checked aria-label="Tick every delivery"></th><th>Delivery</th><th>Order</th><th>Tracking no.</th><th class="number">Customer paid</th><th class="number">Charges</th><th class="number">${pay ? 'Already settled' : 'Already received'}</th><th class="number">${pay ? 'Paid now' : 'Received now'}</th></tr></thead><tbody>${rows.map(({ d, b }) => `<tr><td><input type="checkbox" data-inc="${d.id}" checked aria-label="Include ${d.id}"></td><td>${d.id}<br><small>${esc(d.status)}</small></td><td>#${d.orderId}</td><td>${esc(d.tracking || '—')}</td><td class="number">${m(b.customer)}</td><td class="number">${m(-b.deductions)}</td><td class="number">${m(b.actual)}</td><td class="number"><input class="qtyinput wide" type="number" step="0.01" value="${sg * b.gap}" data-alloc="${d.id}" data-exp="${sg * b.gap}" aria-label="${pay ? 'Paid' : 'Net received'} for ${d.id}"></td></tr>`).join('')}</tbody></table></div>
+      <div class="tablewrap mt"><table><thead><tr><th><input type="checkbox" data-allinc="1" aria-label="Tick every order"></th><th>Order</th><th>Customer</th><th class="number">Customer paid</th><th class="number">Courier commission</th><th class="number">${pay ? 'Already settled' : 'Already received'}</th><th class="number">${pay ? 'You pay' : 'You receive'}</th></tr></thead><tbody>${rows.map(({ d, b }) => `<tr><td><input type="checkbox" data-inc="${d.id}" aria-label="Include order ${d.orderId}"></td><td>#${d.orderId}<br><small>${esc(d.tracking || d.id)} · ${esc(d.status)}</small></td><td>${esc(customerOf(orderOf(d.orderId)).name)}</td><td class="number">${m(b.customer)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" step="0.01" value="${b.deductions}" data-ccom="${d.id}" data-base="${round2(b.customer - b.actual)}" data-amount="1" ${!d.pickedUpAt || d.shippingPaidBy === 'waived' ? 'disabled' : ''} aria-label="Commission on order ${d.orderId}"></td><td class="number">${m(b.actual)}</td><td class="number"><input class="qtyinput wide" type="number" step="0.01" value="${sg * b.gap}" data-alloc="${d.id}" data-exp="${sg * b.gap}" aria-label="${pay ? 'Paid' : 'Received'} for order ${d.orderId}"></td></tr>`).join('')}</tbody></table></div>
       <p class="draft-total" id="allocTotal"></p>`, async f => {
-      const allocations = ticked().map(el => ({ deliveryId: el.dataset.alloc, net: sg * (Number(el.value) || 0) })).filter(a => a.net);
-      if (!allocations.length) fail('Tick at least one delivery.');
+      const allocations = ticked().map(el => ({ deliveryId: el.dataset.alloc, net: sg * (Number(el.value) || 0), commission: Number(document.querySelector(`#modalForm [data-ccom="${el.dataset.alloc}"]`).value) || 0 })).filter(a => a.net);
+      if (!allocations.length) fail('Tick at least one order.');
       const t = round2(sg * sum(allocations, a => a.net));
-      if (f.received !== '' && Math.abs(t - Number(f.received)) > tol()) fail(pay ? `The ticked shipments add up to ${m(t)}, but you paid ${m(Number(f.received))}. Untick or correct shipments until the difference is zero, or leave "Amount paid" empty.` : `The ticked deliveries add up to ${m(t)}, but you received ${m(Number(f.received))}. Untick or correct deliveries until the difference is zero, or leave "Amount received" empty.`);
       await Commands.recordSettlement({ courierId, ref: f.ref, at: dateToIso(f.date), allocations, note: pay ? `Paid to ${cr.name}` : '' }); toast(`Payment ${f.ref} recorded: ${m(t)}.`);
     }, pay ? 'Record payment to courier' : 'Record payment', { wide: true });
     modalLive = async ev => {
@@ -372,9 +391,11 @@ const A = {
       if (t?.id === 'stmtFile' && t.files[0]) { if (t.files[0].size > 5e6) toast('The statement is larger than 5 MB.', 'bad'); else loadStatement(await t.files[0].text()); }
       if (t?.name === 'stmtText') loadStatement(t.value);
       if (t?.dataset?.stmt) matchStatement();
+      /* A changed commission changes what that order settles for. */
+      if (t?.dataset?.ccom) { const el = fm.querySelector(`[data-alloc="${t.dataset.ccom}"]`); el.value = round2(sg * (Number(t.dataset.base) - (Number(t.value) || 0))); }
       fm.querySelectorAll('[data-alloc]').forEach(el => { el.disabled = !fm.querySelector(`[data-inc="${el.dataset.alloc}"]`).checked; });
-      const inc = ticked(), tot = round2(sum(inc, el => Number(el.value) || 0)), rec = fm.elements.received.value, diff = rec === '' ? null : round2(Number(rec) - tot);
-      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Deliveries ticked</span> <b>${inc.length}</b></span><span class="bd"><span>Their total</span> <b>${m(tot)}</b></span>${diff === null ? '' : `<span class="bd ${Math.abs(diff) > tol() ? 'negative' : 'positive'}"><span>${pay ? 'Difference from the amount paid' : 'Difference from the amount received'}</span> <b>${m(diff)}</b></span>`}`;
+      const inc = ticked(), tot = round2(sum(inc, el => Number(el.value) || 0)), com = round2(sum(inc, el => Number(fm.querySelector(`[data-ccom="${el.dataset.alloc}"]`).value) || 0));
+      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Orders ticked</span> <b>${inc.length}</b></span><span class="bd"><span>Commission</span> <b>${m(com)}</b></span><span class="bd total"><span>${pay ? 'Amount you pay' : 'Amount you receive'}</span> <b>${m(tot)}</b></span>`;
     };
     modalLive();
   },
@@ -526,7 +547,9 @@ function matchStatement() {
   }
   fm.querySelectorAll('[data-inc]').forEach(x => { x.checked = got.has(x.dataset.inc); }); fm.querySelector('[data-allinc]').checked = false;
   fm.querySelectorAll('[data-alloc]').forEach(el => { el.value = got.has(el.dataset.alloc) ? got.get(el.dataset.alloc) : el.dataset.exp; });
-  const total = round2(sum([...got.values()], x => x)); if (got.size) fm.elements.received.value = total;
+  /* The statement's amount implies the courier's commission on that order. */
+  for (const [id, v] of got) { const c = fm.querySelector(`[data-ccom="${id}"]`); if (c && !c.disabled) c.value = round2(Math.max(0, Number(c.dataset.base) - v)); }
+  const total = round2(sum([...got.values()], x => x));
   const odd = [...got].filter(([id, v]) => Math.abs(v - Number(fm.querySelector(`[data-alloc="${id}"]`).dataset.exp)) > tol());
   const list = (title, xs, html) => xs.length ? `<p class="mt"><strong>${title}</strong> <span class="badge">${xs.length}</span></p><p class="small">${xs.slice(0, 25).map(x => html ? x : esc(x)).join(html ? '<br>' : ' · ')}${xs.length > 25 ? ' …' : ''}</p>` : '';
   box.innerHTML = `<div class="stmt-sum"><span class="bd"><span>Rows in the statement</span> <b>${stmt.rows.length}</b></span><span class="bd positive"><span>Matched and ticked</span> <b>${got.size}</b></span><span class="bd"><span>Statement total</span> <b>${m(total)}</b></span></div>`

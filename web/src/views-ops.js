@@ -170,15 +170,16 @@ function shippingView() {
     'With carriers': () => {
       const out = active.filter(d => d.pickedUpAt && d.status !== 'Handed Over'), carriers = [...new Map(out.map(d => [d.carrierKey, d])).values()];
       const rows = out.filter(d => (!st.carrier || d.carrierKey === st.carrier) && (!st.gov || govOf(orderOf(d.orderId).area) === st.gov));
+      const canDeliver = d => !['Return in Transit', 'Partially Delivered'].includes(d.status), ticks = rows.filter(canDeliver).map(d => d.orderId), picked = ticks.filter(id => ui.selected.has(id));
       const outcome = d => d.status === 'Return in Transit' || d.status === 'Partially Delivered' ? btn('Returned', 'returnedModal', d.id, { cls: 'small' }) : btn('Delivered', 'deliveredModal', d.id, { cls: 'small primary' }) + btn('Returned', 'returnedModal', d.id, { cls: 'small' });
       return note('Record each parcel as Delivered (in full or in part) or Returned. Cash a driver collects goes on their balance. Receive it under Finance → Driver cash, where their commission is deducted.')
-        + `<section class="card"><div class="filters">${sel('ship.carrier', 'Driver or courier', [['', 'All'], ...carriers.map(d => [d.carrierKey, carrierName(d)])], 'wc')}${sel('ship.gov', 'Governorate', [['', 'All'], ...[...new Set(out.map(d => govOf(orderOf(d.orderId).area)).filter(Boolean))]], 'wc')}<span class="muted small">${rows.length} parcels</span></div>${grid('wc', rows, [
+        + `<section class="card"><div class="filters">${sel('ship.carrier', 'Driver or courier', [['', 'All'], ...carriers.map(d => [d.carrierKey, carrierName(d)])], 'wc')}${sel('ship.gov', 'Governorate', [['', 'All'], ...[...new Set(out.map(d => govOf(orderOf(d.orderId).area)).filter(Boolean))]], 'wc')}<span class="muted small">${rows.length} parcels</span><div class="spacer"></div>${btn(picked.length ? `Mark ${picked.length} delivered` : 'Mark selected delivered', 'bulkDeliveredModal', picked, { cls: 'primary', why: picked.length ? '' : 'Tick the delivered orders first.' })}</div>${grid('wc', rows, [
+          { k: 'sel', label: () => `<input type="checkbox" aria-label="Select all" data-selall="${esc(JSON.stringify(ticks))}" ${ticks.length && picked.length === ticks.length ? 'checked' : ''}>`, render: d => canDeliver(d) ? `<input type="checkbox" aria-label="Select order ${d.orderId}" data-sel="${d.orderId}" ${ui.selected.has(d.orderId) ? 'checked' : ''}>` : '' },
           { k: 'id', label: 'Order', sort: d => d.orderId, render: d => `${orderA(d.orderId)}<br><small>${esc(d.id)}</small>` },
           { k: 'c', label: 'Customer', render: d => { const c = customerOf(orderOf(d.orderId)); return `${custA(c)}<br><small>${esc(c.phone)}</small>`; } },
           { k: 'ad', label: 'Governorate / address', wrap: true, render: d => { const x = orderOf(d.orderId); return `${areaLabel(x.area)}<br><small>${esc(x.address)}</small>`; } },
           { k: 'car', label: 'Carrier', sort: d => carrierName(d), render: d => carrierA(d) },
           { k: 'st', label: 'Status', sort: d => d.status, render: d => badge(d.status) },
-          { k: 'cm', label: 'Commission', num: true, render: d => m(d.cost || 0) },
           { k: 'ex', label: 'To collect', num: true, sort: d => expectedFromCustomer(d), render: d => m(expectedFromCustomer(d)) },
           { k: 'ac', label: '', render: outcome },
         ], { sort: 'id', dir: 1, empty: 'No parcels are out with a carrier.' })}</section>`;

@@ -256,7 +256,8 @@ function deliveryCash(d) {
   const cash = sum(ps.filter(p => p.kind === 'collection' && p.method === 'Cash' && p.holderKey === carrierKey(d.mode, d.carrierId)), p => p.amount);
   const refunds = sum(ps.filter(p => p.kind === 'refund' && p.holderKey === carrierKey(d.mode, d.carrierId)), p => -p.amount);
   const handed = sum(Repo.by('handoverAllocs', 'deliveryId', d.id), a => a.amount);
-  return { collected, cash, refunds, handed, unhanded: round2(cash - refunds - handed), method: ps.find(p => p.kind === 'collection')?.method || '' };
+  const kept = sum(Repo.by('driverExpenses', 'deliveryId', d.id).filter(e => e.category === 'Delivery fee payout' && e.paidFromCash && e.status !== 'Rejected'), e => e.amount);
+  return { collected, cash, refunds, handed, kept, unhanded: round2(cash - refunds - handed - kept), method: ps.find(p => p.kind === 'collection')?.method || '' };
 }
 /* What the customer is expected to pay on this delivery, given what they have already paid. */
 function expectedFromCustomer(d) {
@@ -267,11 +268,25 @@ function expectedFromCustomer(d) {
   }
   return round2(Math.max(0, c.value - c.paid));
 }
+/* What the carrier charges for this trip (its commission): shipping, return and COD fees, unless waived. Booked as delivery cost. */
+function carrierCharge(d) {
+  const waived = d.shippingPaidBy === 'waived';
+  return round2((d.pickedUpAt && !waived ? d.cost : 0) + (d.returnedAt && !waived ? d.returnCost : 0) + (d.completedAt ? d.codFee : 0));
+}
+/* The commission is agreed per order: changing it moves the trip's shipping cost, so profit follows. */
+function setCarrierCharge(d, amount) {
+  amount = round2(Number(amount)); if (!(amount >= 0)) fail(`${d.id}: commission must be zero or more.`);
+  const diff = round2(amount - carrierCharge(d)); if (Math.abs(diff) < 0.005) return;
+  if (!d.pickedUpAt || d.shippingPaidBy === 'waived') fail(`${d.id}: no commission applies to this trip.`);
+  if (round2(d.cost + diff) < 0) fail(`${d.id}: commission cannot be below its return and COD charges (${money(carrierCharge(d) - d.cost)}).`);
+  assertOpen(d.pickedUpAt, `Changing the commission on ${d.id}`);
+  Repo.update('deliveries', d, { cost: round2(d.cost + diff) });
+  log(`Commission on ${d.id} set to ${money(amount)}`, { orderId: d.orderId, deliveryId: d.id });
+}
 function courierDeliveryBalance(d) {
   const ps = Repo.by('payments', 'deliveryId', d.id).filter(p => p.holderKey === carrierKey('courier', d.carrierId));
   const customer = sum(ps, p => p.amount);
-  const waived = d.shippingPaidBy === 'waived';
-  const deductions = round2((d.pickedUpAt && !waived ? d.cost : 0) + (d.returnedAt && !waived ? d.returnCost : 0) + (d.completedAt ? d.codFee : 0));
+  const deductions = carrierCharge(d);
   const expectedNet = round2(customer - deductions);
   const actual = sum(Repo.by('settlementAllocs', 'deliveryId', d.id), a => a.net);
   return { customer, deductions, expectedNet, actual, gap: round2(expectedNet - actual) };
@@ -306,12 +321,6 @@ function driverCash(id) {
   const outstanding = round2(collected - handed - approvedCash - refunds);
   const openDisc = sum(Repo.by('discrepancies', 'carrierKey', key).filter(x => x.status === 'Open'), x => x.amount);
   return { collected, refunds, handed, approvedCash, pendingExp, nonCash, expected, outstanding, openDisc };
-}
-/* Commission earned on finished trips (delivered or returned) less what the driver already kept. */
-function driverCommissionOwed(id) {
-  const earned = sum(Repo.by('deliveries', 'carrierKey', carrierKey('driver', id)).filter(d => d.pickedUpAt && (d.completedAt || d.returnedAt) && d.shippingPaidBy !== 'waived'), d => (d.cost || 0) + (d.returnedAt ? d.returnCost || 0 : 0));
-  const paid = sum(Repo.by('driverExpenses', 'driverId', id).filter(e => e.category === 'Delivery fee payout' && e.status !== 'Rejected'), e => e.amount);
-  return round2(Math.max(0, earned - paid));
 }
 function driverStats(id) {
   const ds = Repo.by('deliveries', 'carrierKey', carrierKey('driver', id));
@@ -446,9 +455,7 @@ const Commands = {
     return Repo.tx(() => {
       const then = opts.then || 'assigned';
       if (!['assigned', 'picked', 'out'].includes(then)) fail('Choose what happens after assigning.');
-      const cost = opts.cost === undefined || opts.cost === '' || opts.cost === null ? undefined : Number(opts.cost);
-      if (cost !== undefined && !(cost >= 0)) fail('Commission must be zero or more.');
-      const d = Commands.assign(orderId, mode, carrierId, { tracking: opts.tracking, cost });
+      const d = Commands.assign(orderId, mode, carrierId, { tracking: opts.tracking });
       if (then !== 'assigned') Commands.pickup(d.id);
       if (then === 'out') Commands.setDeliveryStatus(d.id, 'Out for Delivery', { note: 'Out for delivery' });
       return Repo.get('deliveries', d.id);
@@ -655,14 +662,28 @@ const Commands = {
 
   /* DRIVER MONEY */
   /* A handover moves custody of cash. It creates no revenue or profit. */
-  recordHandover({ driverId, ref, at, receivedBy, allocations, declared, note, commission }) {
+  recordHandover({ driverId, ref, at, receivedBy, allocations, declared, note }) {
     return Repo.tx(() => {
-      /* The driver keeps their commission from the cash: booked as a delivery fee payout (already in shipping costs). */
-      commission = round2(Number(commission) || 0);
-      if (commission < 0 || commission > driverCommissionOwed(driverId) + 0.001) fail(`Commission kept can be at most ${money(driverCommissionOwed(driverId))}.`);
-      if (commission > 0) { const x = Commands.addDriverExpense({ driverId, category: 'Delivery fee payout', amount: commission, paidFromCash: true, note: `Commission kept at handover ${ref || ''}`.trim() }); Commands.decideDriverExpense(x, 'Approved'); }
-      /* The commission used up all the cash: nothing is handed over. */
-      if (commission > 0 && !(allocations || []).some(a => Number(a.amount) > 0)) return null;
+      /* An allocation with a commission settles that order: the driver keeps the commission from its cash
+         (a delivery fee payout, already in shipping costs) and hands over the rest. */
+      const dr0 = Repo.get('drivers', driverId); if (!dr0) fail('Unknown driver.');
+      let kept = 0;
+      allocations = (allocations || []).map(a => {
+        if (a.commission === undefined || a.commission === null || a.commission === '') return a;
+        const d = Repo.get('deliveries', a.deliveryId); if (!d || d.carrierKey !== carrierKey('driver', driverId)) fail(`${a.deliveryId} did not have its cash collected by ${dr0.name}.`);
+        const c = round2(Number(a.commission)), left = deliveryCash(d).unhanded;
+        if (!(c >= 0)) fail(`${d.id}: commission must be zero or more.`);
+        if (c > left + 0.001) fail(`${d.id}: commission ${money(c)} is more than the ${money(left)} cash on this order.`);
+        if (c > 0) {
+          kept += c;
+          if (deliveryCash(d).kept > 0) fail(`${d.id}: the driver already kept a commission on this order.`);
+          setCarrierCharge(d, c);
+          Commands.decideDriverExpense(Commands.addDriverExpense({ driverId, deliveryId: d.id, category: 'Delivery fee payout', amount: c, paidFromCash: true, note: `Commission on #${d.orderId}` }), 'Approved');
+        }
+        return { deliveryId: d.id, amount: round2(left - c) };
+      });
+      /* The commissions used up all the cash: nothing is handed over. */
+      if (kept > 0 && !allocations.some(a => Number(a.amount) > 0)) return null;
       const dr = Repo.get('drivers', driverId); if (!dr) fail('Unknown driver.');
       ref = (ref || '').trim(); if (!ref) fail('A unique handover reference is required.');
       if (Repo.count('handovers', 'ref', ref)) fail(`Handover reference ${ref} already exists.`);
@@ -728,6 +749,7 @@ const Commands = {
       for (const a of allocations) {
         if (seen.has(a.deliveryId)) fail(`${a.deliveryId} appears twice.`); seen.add(a.deliveryId);
         const d = Repo.get('deliveries', a.deliveryId); if (!d || d.carrierKey !== carrierKey('courier', courierId)) fail(`${a.deliveryId} does not belong to ${cr.name}.`);
+        if (a.commission !== undefined && a.commission !== null && a.commission !== '') setCarrierCharge(d, a.commission);
       }
       const id = 'ST-' + Repo.nextId('ST', 901), net = sum(allocations, a => a.net); assertOpen(at, 'This settlement');
       Repo.insert('settlements', { id, courierId, ref, at: at || Clock.now(), net, note: note || '', by: activityBy() });
@@ -1245,4 +1267,4 @@ function integrity() {
   return out;
 }
 
-export { driverCommissionOwed, GOVERNORATES, SEED_AREAS, govOf, ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };
+export { carrierCharge, GOVERNORATES, SEED_AREAS, govOf, ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };
