@@ -4,7 +4,7 @@ import { enterScreen, refreshScreen, scrollTop, startSmoothScroll } from './moti
 import { isAr, startI18n, translateTree } from './i18n.js';
 import { Repo, esc } from '@commerce-os/domain';
 import { GOVERNORATES, S } from '@commerce-os/domain';
-import { LOGO, NAV, card, chartHover, icon, iconBtn, initials, pad, setPath, ui } from './ui-kit.js';
+import { LOGO, NAV, btn, card, chartHover, icon, iconBtn, initials, pad, setPath, ui } from './ui-kit.js';
 import { order360, ordersView, overview } from './views-core.js';
 import { crmView, driverProfile, inventoryView, shippingView } from './views-ops.js';
 import { campaignsView, financeView, roadmapView, settingsView } from './views-biz.js';
@@ -35,7 +35,9 @@ function render() {
   placeNavPill(document.getElementById('nav'));
   const a = document.activeElement, focusId = a && a.id && a.id.startsWith('s-') ? a.id : null, caret = focusId ? a.selectionStart : 0;
   const main = document.getElementById('main'), openEx = [...main.querySelectorAll('details[open]')].length;
-  main.innerHTML = VIEWS[ui.route.page]() + `<div class="footerhint"><span>${esc(Session.user.name)}</span> · <span>${esc(Session.user.role)}</span> · <span>${Session.online ? 'Connected' : 'Reconnecting…'}</span> · <span>No live integrations, messages or payments.</span></div>`;
+  /* shortcut: other open sessions see the banner only after a reload, fine for a one-person test. */
+  const testBar = Session.testSince ? `<div class="testbar" role="status"><span><strong>Test mode.</strong> You are working on empty test data. Your real data is saved and comes back when the test ends.</span>${Session.user.role === 'owner' ? btn('End test', 'testEndModal', undefined, { cls: 'small primary' }) : ''}</div>` : '';
+  main.innerHTML = testBar + VIEWS[ui.route.page]() + `<div class="footerhint"><span>${esc(Session.user.name)}</span> · <span>${esc(Session.user.role)}</span> · <span>${Session.online ? 'Connected' : 'Reconnecting…'}</span> · <span>No live integrations, messages or payments.</span></div>`;
   /* A new screen or tab flows in. A re-render of the same screen (after a sync or a filter) doesn't. */
   const key = `${location.hash}|${ui.inv?.tab}|${ui.ship?.tab}|${ui.fin?.tab}|${ui.set?.tab}|${ui.ov?.preset}|${ui.staff?.tab}`;
   if (key !== _screenKey) { _screenKey = key; enterScreen(main); } else refreshScreen(main);
@@ -121,7 +123,7 @@ function loginView() {
   document.getElementById('main').innerHTML = `<div class="login"><div class="login-lang">${langToggle()}</div><form id="loginForm" class="card"><div class="pad"><span class="logo-mark" aria-hidden="true">${LOGO(44)}</span><h1>Sign in to Commerce OS</h1><label class="field mt">Email<input name="email" type="email" required autocomplete="username"></label><label class="field mt">Password<input name="password" type="password" required autocomplete="current-password"></label><p id="loginError" class="form-error" role="alert"></p><button class="primary mt" style="width:100%">Sign in</button></div></form></div>`;
   document.getElementById('loginForm').addEventListener('submit', async e => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
-    try { const r = await request('/api/auth/login', { method: 'POST', body: f }); Session.user = r.user; await enter(); }
+    try { const r = await request('/api/auth/login', { method: 'POST', body: f }); Session.user = r.user; Session.testSince = (await request('/api/me')).testSince; await enter(); }
     catch (err) { document.getElementById('loginError').textContent = err.message; }
   });
 }
@@ -151,7 +153,7 @@ async function boot() {
   bindEvents();
   Session.onChange = queueRender;
   Session.onAuthLost = () => { stopSync(); Repo.data = null; closeModal(); Session.user = null; loginView(); };
-  try { Session.demoTools = (await request('/api/config')).demoTools; const me = await request('/api/me'); Session.user = me.user; await enter(); }
+  try { Session.demoTools = (await request('/api/config')).demoTools; const me = await request('/api/me'); Session.user = me.user; Session.testSince = me.testSince; await enter(); }
   catch { loginView(); }
 }
 boot();

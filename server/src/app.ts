@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import { Rule, ROLES } from '@commerce-os/domain';
 import { pool, ensureColumns, migrateDb, describeDbError } from './db.ts';
 import { COOKIE, SESSION_DAYS, createSession, destroySession, destroyUserSessions, userFromToken, hashPassword, checkPassword, validPassword, dummyHash, tooManyAttempts, recordFailure, ensureAdmin, ensureDemoLogins } from './auth.ts';
-import { Forbidden, runCommand, resetDemo, loadTest, restore, ensureWorkspace, type User } from './store.ts';
+import { Forbidden, runCommand, resetDemo, loadTest, restore, ensureWorkspace, startTestMode, endTestMode, testModeSince, type User } from './store.ts';
 import { version, snapshotPage, snapshotBatch, driverSnapshot, changesSince, backupChunks, redactDelta } from './reads.ts';
 
 declare module 'fastify' { interface FastifyRequest { user: User | null } }
@@ -81,7 +81,7 @@ export async function buildApp({ serveStatic = false } = {}) {
     return { user: (await pool.query('SELECT id, email, name, role, driver_id AS "driverId" FROM users WHERE id=$1', [u.id])).rows[0] };
   });
   app.post('/api/auth/logout', async (req, reply) => { const t = req.cookies[COOKIE]; if (t) await destroySession(t); return reply.clearCookie(COOKIE, { path: '/' }).send({ ok: true }); });
-  app.get('/api/me', { preHandler: auth }, async req => ({ user: req.user }));
+  app.get('/api/me', { preHandler: auth }, async req => ({ user: req.user, testSince: await testModeSince(pool) }));
   app.post('/api/me/password', { preHandler: auth }, async (req, reply) => {
     const { current, next } = (req.body || {}) as any;
     if (await tooManyAttempts(`pw:${req.user!.id}`, '')) return reply.code(429).send({ error: 'Too many attempts. Wait 15 minutes and try again.' });
@@ -143,6 +143,8 @@ export async function buildApp({ serveStatic = false } = {}) {
   /* Workspace data */
   app.get('/api/admin/backup', { preHandler: owner }, async (_req, reply) => reply.type('application/json').header('Content-Disposition', `attachment; filename="commerce-os-backup-${new Date().toISOString().slice(0, 10)}.json"`).send(Readable.from(backupChunks())));
   app.post('/api/admin/restore', { preHandler: owner }, async req => { await restore(req.body); return { ok: true }; });
+  app.post('/api/admin/test-mode/start', { preHandler: owner }, async req => { await startTestMode(req.user!.name); return { ok: true }; });
+  app.post('/api/admin/test-mode/end', { preHandler: owner }, async () => { await endTestMode(); return { ok: true }; });
   app.post('/api/admin/reset', { preHandler: [demoOnly, owner] }, async () => {
     await resetDemo();
     /* With SEED_PASSWORD set (10+ characters), the reset also creates one test login per role. */

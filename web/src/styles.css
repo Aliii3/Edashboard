@@ -236,3 +236,5 @@ td.ac .acell,td.ac span{display:inline-block;min-width:24px;padding:3px 2px;bord
 .board-scroll{max-height:420px;overflow-y:auto;overscroll-behavior:contain}
 .board-pick{display:flex;gap:10px;align-items:flex-start;flex:1;min-width:0}.board-pick input{margin-top:4px}
 .board-box .filters{padding:0 18px}
+.testbar{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:0 0 14px;padding:10px 16px;border-radius:14px;background:#fff4d6;border:1px solid #f2c94c;color:#5a4300}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .testbar{background:#3a2f0a;border-color:#8a6d12;color:#ffe9a8}}

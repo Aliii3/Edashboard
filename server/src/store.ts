@@ -71,6 +71,20 @@ export const restore = (raw: any) => replaceWorkspace(() => {
   const d = migrate(raw); if (!d || d.schema !== SCHEMA_VERSION || !d.tables) throw new Rule('That file is not a valid Commerce OS backup for this version.');
   Repo.load(d); return { workspace: Repo.data };
 });
+/* Test from scratch: the real records are set aside in test_mode and the workspace starts empty,
+   keeping logins and settings. Ending the test discards the test records and puts the real ones back. */
+export const startTestMode = (by: string) => replaceWorkspace(async (c: any) => {
+  if ((await c.query('SELECT 1 FROM test_mode')).rowCount) throw new Rule('A test is already running. End it first.');
+  const cur = (await loadAll(c))!.data;
+  await c.query('INSERT INTO test_mode (id, data, started_by) VALUES (1, $1, $2)', [JSON.stringify(cur), by]);
+  const e = Repo.empty(); e.settings = cur.settings; e.roadmap = cur.roadmap; return { workspace: e };
+});
+export const endTestMode = () => replaceWorkspace(async (c: any) => {
+  const r = await c.query('DELETE FROM test_mode RETURNING data'); if (!r.rowCount) throw new Rule('No test is running.');
+  const d = migrate(r.rows[0].data); if (!d || d.schema !== SCHEMA_VERSION) throw new Rule('The saved data could not be read. Nothing was changed.');
+  Repo.load(d); return { workspace: Repo.data };
+});
+export const testModeSince = async (c: any) => (await c.query('SELECT started_at FROM test_mode')).rows[0]?.started_at ?? null;
 /* First start: an empty workspace with default settings. */
 export async function ensureWorkspace() {
   await ensureColumns();

@@ -331,6 +331,22 @@ test('resetting demo data creates one test login per role when a demo password i
   const login = await call(null, 'POST', '/api/auth/login', { email: 'warehouse@nilestudio.example', password: 'demo-password-xyz' });
   assert.equal(login.status, 200); assert.equal(login.json().user.role, 'warehouse');
 });
+test('test mode empties the workspace and ending it brings every record back', async () => {
+  const before = await loadAll(), orders = before!.data.tables.orders.length, users = await dbCount('SELECT count(*)::int AS n FROM users');
+  assert.equal((await call('ops', 'POST', '/api/admin/test-mode/start', {})).status, 403);
+  assert.equal((await call('owner', 'POST', '/api/admin/test-mode/start', {})).status, 200);
+  assert.equal((await call('owner', 'POST', '/api/admin/test-mode/start', {})).status, 422, 'only one test at a time');
+  assert.ok((await call('owner', 'GET', '/api/me')).json().testSince);
+  const empty = await loadAll(); assert.equal(empty!.data.tables.orders.length, 0); assert.equal(empty!.data.tables.skus.length, 0);
+  assert.equal(empty!.data.settings.company, before!.data.settings.company, 'settings are kept');
+  assert.equal(await dbCount('SELECT count(*)::int AS n FROM users'), users, 'logins are kept');
+  assert.equal((await cmd('owner', 'saveMaterial', { name: 'Test box', unit: 'pcs', category: 'Packaging', cost: 5, min: 0 })).status, 200);
+  assert.equal((await call('owner', 'POST', '/api/admin/test-mode/end', {})).status, 200);
+  const after = await loadAll(); assert.equal(after!.data.tables.orders.length, orders);
+  assert.deepEqual(norm(after!.data.tables), norm(before!.data.tables), 'every record is back exactly');
+  assert.equal((await call('owner', 'GET', '/api/me')).json().testSince, null);
+  assert.equal((await call('owner', 'POST', '/api/admin/test-mode/end', {})).status, 422);
+});
 test('login attempts are rate limited', async () => {
   let last = 0; for (let i = 0; i < 12; i++) last = (await call(null, 'POST', '/api/auth/login', { email: 'z@t.test', password: 'wrong-password' })).status;
   assert.equal(last, 429);
