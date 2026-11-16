@@ -737,8 +737,8 @@ const Commands = {
       /* The commissions used up all the cash: nothing is handed over. */
       if (kept > 0 && !allocations.some(a => Number(a.amount) > 0)) return null;
       const dr = Repo.get('drivers', driverId); if (!dr) fail('Unknown driver.');
-      ref = (ref || '').trim(); if (!ref) fail('A unique handover reference is required.');
-      if (Repo.count('handovers', 'ref', ref)) fail(`Handover reference ${ref} already exists.`);
+      ref = (ref || '').trim();   // optional: without one, the handover's own ID is its reference
+      if (ref && Repo.count('handovers', 'ref', ref)) fail(`Handover reference ${ref} already exists.`);
       if (!receivedBy?.trim()) fail('Enter the employee who received the cash.');
       allocations = (allocations || []).filter(a => Number(a.amount) !== 0);
       if (!allocations.length) fail('Allocate the cash to at least one delivery.');
@@ -754,7 +754,7 @@ const Commands = {
       }
       const out = driverCash(driverId).outstanding;
       if (total > out + 0.001) fail(`Handover total ${money(total)} exceeds ${dr.name}'s outstanding cash of ${money(out)} (approved expenses and refunds already reduce it).`);
-      const when = at || Clock.now(), id = 'HO-' + Repo.nextId('HO', 701); assertOpen(when, 'This handover');
+      const when = at || Clock.now(), id = 'HO-' + Repo.nextId('HO', 701); assertOpen(when, 'This handover'); ref ||= id;
       Repo.insert('handovers', { id, driverId, ref, at: when, receivedBy: receivedBy.trim(), amount: total, declared: declared ? round2(declared) : total, note: note || '', by: activityBy() });
       for (const a of allocations) { const d = Repo.get('deliveries', a.deliveryId); Repo.insert('handoverAllocs', { id: `${id}-${a.deliveryId}`, handoverId: id, deliveryId: a.deliveryId, orderId: d.orderId, driverId, amount: round2(a.amount) }); }
       log(`Cash handover ${ref}: ${money(total)} received by ${receivedBy.trim()} across ${allocations.length} deliver${allocations.length > 1 ? 'ies' : 'y'}`, { driverId });
@@ -794,8 +794,8 @@ const Commands = {
   recordSettlement({ courierId, ref, at, allocations, note }) {
     return Repo.tx(() => {
       const cr = Repo.get('couriers', courierId); if (!cr) fail('Unknown courier.');
-      ref = (ref || '').trim(); if (!ref) fail('A unique settlement reference is required.');
-      if (Repo.count('settlements', 'ref', ref)) fail(`Settlement reference ${ref} already exists.`);
+      ref = (ref || '').trim();   // optional: without one, the settlement's own ID is its reference
+      if (ref && Repo.count('settlements', 'ref', ref)) fail(`Settlement reference ${ref} already exists.`);
       allocations = (allocations || []).filter(a => Number(a.net) !== 0); if (!allocations.length) fail('Enter an amount for at least one delivery.');
       const seen = new Set();
       for (const a of allocations) {
@@ -803,7 +803,7 @@ const Commands = {
         const d = Repo.get('deliveries', a.deliveryId); if (!d || d.carrierKey !== carrierKey('courier', courierId)) fail(`${a.deliveryId} does not belong to ${cr.name}.`);
         if (a.commission !== undefined && a.commission !== null && a.commission !== '') setCarrierCharge(d, a.commission);
       }
-      const id = 'ST-' + Repo.nextId('ST', 901), net = sum(allocations, a => a.net); assertOpen(at, 'This settlement');
+      const id = 'ST-' + Repo.nextId('ST', 901), net = sum(allocations, a => a.net); assertOpen(at, 'This settlement'); ref ||= id;
       Repo.insert('settlements', { id, courierId, ref, at: at || Clock.now(), net, note: note || '', by: activityBy() });
       for (const a of allocations) { const d = Repo.get('deliveries', a.deliveryId); Repo.insert('settlementAllocs', { id: `${id}-${a.deliveryId}`, settlementId: id, deliveryId: a.deliveryId, orderId: d.orderId, net: round2(a.net) }); log(`Courier settlement ${ref}: net ${money(a.net)}`, { orderId: d.orderId, deliveryId: d.id }); }
       return id;
@@ -1060,7 +1060,6 @@ const Commands = {
       const name = (f.name || '').trim(), phone = (f.phone || '').replace(/[\s-]/g, '');
       if (!name) fail('Enter the customer name.');
       if (!/^01[0125]\d{8}$/.test(phone)) fail('Enter a valid Egyptian mobile number (11 digits, starting 010, 011, 012 or 015).');
-      const dup = Repo.all('customers').find(c => c.phone === phone && c.id !== f.id); if (dup) fail(`${phone} already belongs to ${dup.name}.`);
       const row = { name, phone, area: f.area || AREAS[0], address: (f.address || '').trim(), altAddresses: f.altAddresses || [], deliveryNotes: (f.deliveryNotes || '').trim(), preferredTime: f.preferredTime || 'Any time', tags: f.tags || [] };
       if (!row.address) fail('Enter a delivery address.');
       if (f.id) { Repo.update('customers', Repo.get('customers', f.id), row); log('Customer profile updated', { customerId: f.id }); return Repo.get('customers', f.id); }

@@ -1,5 +1,13 @@
 /* Arabic interface text, keyed by the English text shown on screen. */
 export const AR = {
+"Collections from carriers": "تحصيلات من المناديب",
+"Collection history": "سجل التحصيلات",
+"Nothing collected yet.": "لم يتم تحصيل شيء بعد.",
+"Below zero is a payment you made to a courier": "أقل من صفر يعني دفعة دفعتها لشركة شحن",
+"Choose the driver or courier you are collecting from and press Receive cash or Receive payment. Tick the orders being settled and check each order's commission. The amount you receive is calculated.": "اختر المندوب أو شركة الشحن التي تحصّل منها واضغط «استلام النقدية» أو «استلام دفعة». حدّد الطلبات التي تتم تسويتها وراجع عمولة كل طلب. المبلغ الذي تستلمه يُحسب تلقائيًا.",
+"Receipt reference (optional)": "مرجع الإيصال (اختياري)",
+"Payment reference (optional)": "مرجع الدفعة (اختياري)",
+"Filled in for you if left empty": "يُملأ تلقائيًا إذا تُرك فارغًا",
 "Delivered or returned in the last 7 days": "تم التسليم أو الإرجاع خلال آخر 7 أيام",
 "Undo": "تراجع",
 "Nothing delivered or returned this week.": "لم يتم تسليم أو إرجاع أي شيء هذا الأسبوع.",
@@ -145,7 +153,7 @@ export const AR = {
 "Empties the app so you can try it from the start, then brings your real data back when you end the test. Logins and settings stay.": "يفرّغ التطبيق لتجربته من البداية، ثم يرجّع بياناتك الحقيقية عند إنهاء التجربة. الحسابات والإعدادات تبقى.",
 "A test is already running. End it first.": "توجد تجربة جارية بالفعل. أنهِها أولًا.",
 "No test is running.": "لا توجد تجربة جارية.",
-"Record each parcel as Delivered (in full or in part) or Returned. Cash a driver collects goes on their balance. Receive it under Finance → Driver cash, where their commission is deducted.": "سجّل كل شحنة كـ «تم التسليم» (كليًا أو جزئيًا) أو «مرتجع». النقدية التي يحصّلها المندوب تُضاف على حسابه، واستلمها من المالية ← نقدية المناديب حيث تُخصم عمولته.",
+"Record each parcel as Delivered (in full or in part) or Returned. Cash a driver collects goes on their balance. Receive it under Finance → Collections from carriers, where their commission is deducted.": "سجّل كل شحنة كـ «تم التسليم» (كليًا أو جزئيًا) أو «مرتجع». النقدية التي يحصّلها المندوب تُضاف على حسابه، واستلمها من المالية ← تحصيلات من المناديب حيث تُخصم عمولته.",
 "Cairo": "القاهرة",
 "Dakahlia": "الدقهلية",
 "Qalyubia": "القليوبية",

@@ -17,7 +17,7 @@ export const demoTools = () => process.env.DEMO_TOOLS === '1' || (process.env.NO
 const UNIQUE: Record<string, string> = {
   orders_external_ref_unique: 'That external reference was already imported.', payments_ref_key: 'That payment reference has already been used.',
   handovers_ref_key: 'That handover reference already exists.', settlements_ref_key: 'That settlement reference already exists.',
-  movements_key_unique: 'That stock movement was already recorded, so it was not repeated.', customers_phone_key: 'That phone number already belongs to another customer.',
+  movements_key_unique: 'That stock movement was already recorded, so it was not repeated.',
   users_email_key: 'A login with that email already exists.', deliveries_one_active_per_order: 'This order already has an active delivery.',
 };
 

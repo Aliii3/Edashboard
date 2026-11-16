@@ -287,3 +287,14 @@ test('undo Delivered and Returned: everything goes back, and is refused once the
   assert.equal(stockOnHand('TEE-IVR'), out + 2, 'returned again after the undo');
   assert.deepEqual(integrity().filter(x => !x.ok), []);
 });
+
+test('a phone number can belong to two customers, and collection references are optional', () => {
+  buildSeedWorkspace();
+  const a = Commands.saveCustomer({ name: 'Ezz Fawzy', phone: '01012473115', area: 'Maadi', address: '1 Road 9' });
+  const b = Commands.saveCustomer({ name: 'Mona Fawzy', phone: '01012473115', area: 'Maadi', address: '1 Road 9' });
+  assert.notEqual(a.id, b.id); assert.equal(Repo.by('customers', 'phone', '01012473115').length, 2);
+  const d = Repo.all('deliveries').find(x => x.mode === 'driver' && deliveryCash(x).unhanded > 0);
+  const id = Commands.recordHandover({ driverId: d.carrierId, receivedBy: 'T', allocations: [{ deliveryId: d.id, commission: 0 }] });
+  assert.equal(Repo.get('handovers', id).ref, id, 'no reference given: the handover ID is used');
+  assert.deepEqual(integrity().filter(x => !x.ok), []);
+});

@@ -341,13 +341,12 @@ const A = {
     const dr = Repo.get('drivers', driverId), c = driverCash(driverId);
     const rows = Repo.by('deliveries', 'carrierKey', carrierKey('driver', driverId)).map(d => ({ d, cash: deliveryCash(d) })).filter(x => x.cash.unhanded > 0).sort((a, b) => (a.d.completedAt || a.d.assignedAt).localeCompare(b.d.completedAt || b.d.assignedAt));
     if (!rows.length) return toast(`${dr.name} holds no cash to receive.`);
-    const n = Repo.count('handovers', 'driverId', driverId) + 1;
     /* Tick the orders settled today. Each keeps its own commission; what you receive is calculated. */
     const row = ({ d, cash }) => { const done = cash.kept > 0, def = done ? 0 : Math.min(carrierCharge(d), cash.unhanded); return `<tr><td><input type="checkbox" data-inc="${d.id}" aria-label="Settle order ${d.orderId}"></td><td>#${d.orderId}<br><small>${esc(d.id)} · ${esc(d.status)}</small></td><td>${esc(customerOf(orderOf(d.orderId)).name)}</td><td class="number">${m(cash.unhanded)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" max="${cash.unhanded}" step="0.01" value="${def}" data-com="${d.id}" data-cash="${cash.unhanded}" data-amount="1" ${done ? 'disabled title="Commission already kept on this order"' : ''} aria-label="Commission on order ${d.orderId}"></td><td class="number" data-net="${d.id}"></td></tr>`; };
     modal(`Receive cash · ${esc(dr.name)}`, `<div class="cash-hero"><span><small>Holding now</small><strong>${m(c.outstanding)}</strong></span><small>From ${rows.length} orders</small></div>
       <div class="tablewrap mt"><table><thead><tr><th><input type="checkbox" data-allinc="1" aria-label="Tick every order"></th><th>Order</th><th>Customer</th><th class="number">Cash with driver</th><th class="number">Driver commission</th><th class="number">You receive</th></tr></thead><tbody>${rows.map(row).join('')}</tbody></table></div>
       <p class="draft-total mt" id="allocTotal"></p>
-      <div class="formgrid mt">${field('Received by', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Receipt reference', 'ref', 'text', `HO-${driverId}-${today().replaceAll('-', '')}-${n}`, 'required maxlength="40"')}${field('Amount the driver says they handed (optional)', 'declared', 'number', '', 'min="0" step="0.01"')}</div><p class="inlinehelp">The commission is the driver's charge for that order and is booked as shipping cost. If the driver declares more than you receive, a discrepancy is opened for review.</p>`, async f => {
+      <div class="formgrid mt">${field('Received by', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Receipt reference (optional)', 'ref', 'text', '', 'maxlength="40" placeholder="Filled in for you if left empty"')}${field('Amount the driver says they handed (optional)', 'declared', 'number', '', 'min="0" step="0.01"')}</div><p class="inlinehelp">The commission is the driver's charge for that order and is booked as shipping cost. If the driver declares more than you receive, a discrepancy is opened for review.</p>`, async f => {
       const picked = [...document.querySelectorAll('#modalForm [data-inc]:checked')].map(el => el.dataset.inc);
       if (!picked.length) fail('Tick the orders the driver is settling.');
       const allocations = picked.map(id => ({ deliveryId: id, commission: Number(document.querySelector(`#modalForm [data-com="${id}"]`).value) || 0 }));
@@ -379,7 +378,7 @@ const A = {
     if (!rows.length) return toast(pay ? `You don't owe ${cr.name} anything.` : `Nothing outstanding from ${cr.name}.`);
     stmt = null; stmtCtx = { courierId };
     modal(pay ? `Pay ${esc(cr.name)}` : `Payment from ${esc(cr.name)}`, `${note(pay ? 'Tick the orders this payment covers. Each one shows what you still owe the courier: their commission less any customer cash they kept.' : 'Tick the orders this payment covers, or let "Match the courier\'s statement" tick them. Each order has its own courier commission. What you receive is calculated.')}
-      <div class="formgrid">${field('Payment reference', 'ref', 'text', '', 'required maxlength="40"')}${field(pay ? 'Date paid' : 'Date received', 'date', 'date', today(), `required max="${today()}"`)}</div>
+      <div class="formgrid">${field('Payment reference (optional)', 'ref', 'text', '', 'maxlength="40" placeholder="Filled in for you if left empty"')}${field(pay ? 'Date paid' : 'Date received', 'date', 'date', today(), `required max="${today()}"`)}</div>
       ${pay ? '' : `<details class="whynot mt"><summary>Match the courier's statement</summary><p class="inlinehelp">Export the statement from the courier's portal as CSV, or copy the rows in Excel and paste them here with the header row. Rows are matched by tracking number, delivery ID or order number.</p>
         <div class="formgrid mt"><label class="field">Statement file (.csv)<input type="file" id="stmtFile" accept=".csv,.tsv,.txt,text/csv"></label><label class="field">Or paste the rows<textarea name="stmtText" rows="3" data-mi="1" dir="auto"></textarea></label></div>
         <div class="formgrid mt" id="stmtCols" hidden>${selectF('Column with the tracking or order number', 'refCol', [], '', 'data-stmt="1"')}${selectF('Column with the amount paid to you', 'amtCol', [], '', 'data-stmt="1"')}</div><div id="stmtResult" class="mt"></div></details>`}
@@ -388,7 +387,7 @@ const A = {
       const allocations = ticked().map(el => ({ deliveryId: el.dataset.alloc, net: sg * (Number(el.value) || 0), commission: Number(document.querySelector(`#modalForm [data-ccom="${el.dataset.alloc}"]`).value) || 0 })).filter(a => a.net);
       if (!allocations.length) fail('Tick at least one order.');
       const t = round2(sg * sum(allocations, a => a.net));
-      await Commands.recordSettlement({ courierId, ref: f.ref, at: dateToIso(f.date), allocations, note: pay ? `Paid to ${cr.name}` : '' }); toast(`Payment ${f.ref} recorded: ${m(t)}.`);
+      await Commands.recordSettlement({ courierId, ref: f.ref, at: dateToIso(f.date), allocations, note: pay ? `Paid to ${cr.name}` : '' }); toast(`Payment recorded: ${m(t)}.`);
     }, pay ? 'Record payment to courier' : 'Record payment', { wide: true });
     modalLive = async ev => {
       const t = ev?.target, fm = document.getElementById('modalForm'); if (!fm) return;

@@ -33,48 +33,26 @@ function financeView() {
         ${card('Profit is not cash', pad(`${row('Customer payments collected', m(t.collected))}${row('Paid but not yet earned, today', m(sum(os, o => { const c = calc(o); return Math.max(0, c.collected - c.revenue); })))}${row('Cash received by the business', m(t.bizcash))}${row('Driver-held cash, today', m(sum(Repo.all('drivers'), d => Math.max(0, driverCash(d.id).outstanding))))}${row('Courier outstanding, today', m(sum(Repo.all('couriers'), c => Math.max(0, courierSummary(c).gap))))}`), 'Cash movements create no revenue or profit. Prepayments on undelivered orders are customer deposits until delivery.')}
         ${card('Assumptions', pad(`<p class="subtitle">Management accounts, not statutory accounts. No VAT, income tax, depreciation or payables are modeled. Revenue is recognized on delivery. Ask an accountant before using these for tax or filings.</p>`))}</div></div>`;
     },
-    'Courier reconciliation': () => {
-      const couriers = Repo.all('couriers').filter(c => !f.courier || c.id === f.courier);
-      const rows = couriers.flatMap(c => Repo.by('deliveries', 'carrierKey', carrierKey('courier', c.id))).filter(d => d.pickedUpAt && d.status !== 'Cancelled Assignment').filter(d => !f.outcome || courierOutcome(d) === f.outcome);
-      const a = { customer: 0, deductions: 0, expectedNet: 0, actual: 0, gap: 0 }; for (const c of couriers) { const s = courierSummary(c); for (const k in a) a[k] += s[k]; }
-      const sts = Repo.all('settlements').filter(s => !f.courier || s.courierId === f.courier).sort((x, y) => y.at.localeCompare(x.at));
-      return note('Receive or pay a courier from the Driver cash tab, where drivers and couriers are settled the same way. This tab shows each delivery\'s balance.')
-        + `<div class="flow">${[['Customer amount', a.customer], ['Approved deductions', -a.deductions], ['Expected net settlement', a.expectedNet], ['Actual net received', a.actual], ['Discrepancy / outstanding', a.gap]].map(([l, v], i) => `<div class="${i === 4 ? 'res' : ''}"><small>${l}</small><b>${m(v)}</b></div>`).join('<i>→</i>')}</div>`
-        + `<section class="card"><div class="filters">${sel('fin.courier', 'Courier', courierOptions(), 'cr')}${sel('fin.outcome', 'Outcome', [['', 'All'], 'Not due', 'Pending', 'Partially collected', 'Reconciled', 'Overpaid', 'Discrepancy'], 'cr')}</div>${grid('cr', rows, [
-          { k: 'd', label: 'Delivery / order', sort: d => d.id, render: d => `${delA(d)}<br><small>${orderA(d.orderId)}</small>` },
-          { k: 't', label: 'Tracking no.', sort: d => d.tracking || '', render: d => d.tracking ? esc(d.tracking) : '<span class="muted">—</span>' },
-          { k: 'c', label: 'Courier', render: d => esc(carrierName(d)) },
-          { k: 's', label: 'Delivery status', render: d => badge(d.status) },
-          { k: 'a', label: 'Customer amount', num: true, sort: d => courierDeliveryBalance(d).customer, render: d => m(courierDeliveryBalance(d).customer) },
-          { k: 'x', label: 'Deductions', num: true, render: d => m(-courierDeliveryBalance(d).deductions) },
-          { k: 'e', label: 'Expected net', num: true, render: d => m(courierDeliveryBalance(d).expectedNet) },
-          { k: 'r', label: 'Actual net', num: true, render: d => m(courierDeliveryBalance(d).actual) },
-          { k: 'g', label: 'Gap', num: true, sort: d => courierDeliveryBalance(d).gap, render: d => { const g = courierDeliveryBalance(d).gap; return `<span class="${Math.abs(g) > tol() && courierOutcome(d) !== 'Not due' ? 'negative' : ''}">${m(g)}</span>`; } },
-          { k: 'o', label: 'Outcome', sort: d => courierOutcome(d), render: d => badge(courierOutcome(d)) },
-        ], { sort: 'd', empty: 'No courier deliveries match.' })}</section><div class="sp"></div>`
-        + card('Settlement history', simpleTable(['Date', 'Reference', 'Courier', 'Deliveries', 'Net received', 'Note'], sts.map(s => `<tr><td>${fd(s.at)}</td><td>${esc(s.ref)}</td><td>${esc(Repo.get('couriers', s.courierId).name)}</td><td>${Repo.count('settlementAllocs', 'settlementId', s.id)}</td><td>${m(s.net)}</td><td class="wrap">${esc(s.note)}</td></tr>`), 'No settlements recorded.'), 'Remittances arrive net of charges. The charges sit once in the P&L.');
-    },
-    'Driver cash': () => {
-      const rows = Repo.all('drivers').filter(d => !f.driver || d.id === f.driver).map(d => ({ d, c: driverCash(d.id) }));
-      const hos = Repo.all('handovers').filter(h => !f.driver || h.driverId === f.driver).sort((a, b) => b.at.localeCompare(a.at));
-      const discs = Repo.all('discrepancies').filter(x => x.status === 'Open' && (!f.driver || x.carrierKey === carrierKey('driver', f.driver)));
-      const pend = Repo.all('driverExpenses').filter(x => x.status === 'Pending' && (!f.driver || x.driverId === f.driver));
+    /* One place to collect from drivers and couriers: pick the carrier, tick the orders, check each commission. */
+    'Collections from carriers': () => {
+      const rows = Repo.all('drivers').map(d => ({ d, c: driverCash(d.id) }));
+      const discs = Repo.all('discrepancies').filter(x => x.status === 'Open');
+      const pend = Repo.all('driverExpenses').filter(x => x.status === 'Pending');
       const outcome = c => c.openDisc > tol() ? 'Discrepancy' : c.outstanding > tol() ? (c.handed > 0 ? 'Partially collected' : 'Pending') : c.outstanding < -tol() ? 'Overpaid' : (c.collected ? 'Reconciled' : 'Not due');
-      return note('To settle with a driver or courier, press Receive cash or Receive payment, tick the orders being settled and check each order\'s commission. The amount you receive is calculated.')
-        + `<div class="filterbar">${sel('fin.driver', 'Driver', driverOptions())}<span class="muted small">Outstanding = collected − handed over − approved cash expenses − cash refunds</span></div>`
+      const hist = [...Repo.all('handovers').map(h => ({ at: h.at, ref: h.ref, who: driverA(h.driverId), by: h.receivedBy, amount: h.amount })), ...Repo.all('settlements').map(x => ({ at: x.at, ref: x.ref, who: esc(Repo.get('couriers', x.courierId)?.name || x.courierId), by: x.by || '', amount: x.net }))];
+      return note('Choose the driver or courier you are collecting from and press Receive cash or Receive payment. Tick the orders being settled and check each order\'s commission. The amount you receive is calculated.')
         + card('Drivers and couriers', simpleTable(['Driver or courier', 'Collected from customers', 'Received by you', 'Commission and expenses', 'Cash refunds', 'Remaining', 'Open discrepancies', 'Outcome', ''], [...rows.map(({ d, c }) => `<tr><td>${driverA(d.id)}<br><small>Driver</small></td><td>${m(c.collected)}</td><td>${m(c.handed)}</td><td>${m(c.approvedCash)}</td><td>${m(c.refunds)}</td><td><strong>${m(c.outstanding)}</strong></td><td>${m(c.openDisc)}</td><td>${badge(outcome(c))}</td><td>${btn('Receive cash', 'handoverModal', d.id, { cls: `small ${c.outstanding > tol() ? 'primary' : ''}`, why: c.outstanding <= 0 ? 'No outstanding cash.' : '' })}</td></tr>`),
-          ...(f.driver ? [] : Repo.all('couriers').map(cr => { const bs = Repo.by('deliveries', 'carrierKey', carrierKey('courier', cr.id)).filter(d => d.completedAt || d.returnedAt).map(courierDeliveryBalance), s = {}; for (const k of ['customer', 'deductions', 'actual', 'gap']) s[k] = round2(sum(bs, x => x[k])); const owe = bs.some(x => x.gap < -tol()), due = bs.some(x => Math.abs(x.gap) > tol()), disc = sum(Repo.all('discrepancies').filter(x => x.status === 'Open' && x.carrierKey === carrierKey('courier', cr.id)), x => x.amount);
+          ...(Repo.all('couriers').map(cr => { const bs = Repo.by('deliveries', 'carrierKey', carrierKey('courier', cr.id)).filter(d => d.completedAt || d.returnedAt).map(courierDeliveryBalance), s = {}; for (const k of ['customer', 'deductions', 'actual', 'gap']) s[k] = round2(sum(bs, x => x[k])); const owe = bs.some(x => x.gap < -tol()), due = bs.some(x => Math.abs(x.gap) > tol()), disc = sum(Repo.all('discrepancies').filter(x => x.status === 'Open' && x.carrierKey === carrierKey('courier', cr.id)), x => x.amount);
             return `<tr><td><strong>${esc(cr.name)}</strong><br><small>Courier</small></td><td>${m(s.customer)}</td><td>${m(s.actual)}</td><td>${m(s.deductions)}</td><td>${m(0)}</td><td><strong class="${s.gap < 0 ? 'negative' : ''}">${m(s.gap)}</strong></td><td>${m(disc)}</td><td>${badge(s.gap > tol() ? (s.actual > 0 ? 'Partially collected' : 'Pending') : s.gap < -tol() ? 'You owe' : 'Reconciled')}</td><td>${btn('Receive payment', 'settlementModal', cr.id, { cls: `small ${s.gap > tol() ? 'primary' : ''}`, why: due ? '' : 'Nothing is waiting to be settled.' })}${owe ? btn('Pay', 'payCourierModal', cr.id, { cls: 'small' }) : ''}</td></tr>`; }))]), 'For a courier, Remaining is what they still owe you after their commission. Below zero means you owe them.')
         + `<div class="sp"></div><div class="grid equal">${card('Expenses to approve', simpleTable(['Driver', 'Category', 'Amount', 'From cash', ''], pend.map(e => `<tr><td>${driverA(e.driverId)}</td><td>${esc(e.category)}</td><td>${m(e.amount)}</td><td>${e.paidFromCash ? 'Yes' : 'No'}</td><td>${btn('Approve', 'decideExp', [e.id, 'Approved'], { cls: 'small primary' })}${btn('Reject', 'decideExp', [e.id, 'Rejected'], { cls: 'small' })}</td></tr>`), 'Nothing pending.'), 'An expense is a cost once. Paying from cash only changes who holds what.')}
         ${card('Open discrepancies', simpleTable(['Carrier', 'Type', 'Order', 'Amount', 'Reason', ''], discs.map(x => { const [tp, id] = x.carrierKey.split(':'); return `<tr><td>${tp === 'driver' ? driverA(id) : esc(Repo.get('couriers', id)?.name)}</td><td>${esc(x.type)}</td><td>${x.orderId ? orderA(x.orderId) : '—'}</td><td>${m(x.amount)}</td><td class="wrap">${esc(x.reason)}</td><td>${btn('Resolve', 'resolveModal', x.id, { cls: 'small' })}</td></tr>`; }), 'No open discrepancies.'))}</div><div class="sp"></div>`
-        + card('Handover history', grid('hos', hos, [
+        + card('Collection history', grid('hos', hist, [
           { k: 'd', label: 'Date', sort: h => h.at, render: h => fdt(h.at) },
           { k: 'r', label: 'Reference', render: h => esc(h.ref) },
-          { k: 'v', label: 'Driver', render: h => driverA(h.driverId) },
-          { k: 'b', label: 'Received by', render: h => esc(h.receivedBy) },
-          { k: 'a', label: 'Amount', num: true, sort: h => h.amount, render: h => m(h.amount) },
-          { k: 'l', label: 'Allocations', wrap: true, render: h => `<small>${Repo.by('handoverAllocs', 'handoverId', h.id).map(a => `${a.deliveryId}: ${m(a.amount)}`).join(' · ')}</small>` },
-        ], { sort: 'd', size: 10, empty: 'No handovers recorded.' }), 'Handovers move custody. They create no new sales or profit.');
+          { k: 'v', label: 'Driver or courier', render: h => h.who },
+          { k: 'b', label: 'Received by', render: h => esc(h.by) },
+          { k: 'a', label: 'Amount', num: true, sort: h => h.amount, render: h => `<span class="${h.amount < 0 ? 'negative' : ''}">${m(h.amount)}</span>` },
+        ], { sort: 'd', size: 10, empty: 'Nothing collected yet.' }), 'Below zero is a payment you made to a courier');
     },
     'Operating expenses': () => periodBar + card('Expense register', grid('exp', Repo.all('expenses').filter(e => inPeriod(e.at)), [
       { k: 'd', label: 'Date', sort: e => e.at, render: e => fd(e.at) },

@@ -37,6 +37,7 @@ const PATTERNS = [
   [/^Depends on: (.+)$/, (m, a) => `يعتمد على: ${trText(a)}`],
   [/^\+(\d+) more lines?$/, (m, a) => `+${a} سطر إضافي`],
   [/^\+(\d+) more$/, (m, a) => `+${a} طلبات أخرى`],
+  [/^Payment recorded: (.+)\.$/, (m, a) => `تم تسجيل الدفعة: ${a}.`],
   [/^Undo the return of #(\d+)\?$/, (m, a) => `التراجع عن مرتجع #${a}؟`],
   [/^Undo the delivery of #(\d+)\?$/, (m, a) => `التراجع عن تسليم #${a}؟`],
   [/^The books are closed through (.+)\.$/, (m, a) => `الحسابات مقفلة حتى ${a}.`],
