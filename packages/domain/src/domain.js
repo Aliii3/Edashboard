@@ -366,6 +366,20 @@ const Guards = {
     const o = orderOf(d.orderId); return o.status === 'Ready' ? null : `Order #${o.id} is ${o.status}. It must be Ready before the parcel can leave the warehouse.`;
   },
   flow(d, to) { return DELIVERY_FLOW[d.status]?.includes(to) ? null : `A delivery in ${d.status} cannot move to ${to}.`; },
+  /* Can a Delivered or Returned parcel go back to "with the carrier"? Not once its money or the order moved on. */
+  undo(d) {
+    const done = d.status === 'Returned to Warehouse' ? d.returnedAt : ['Delivered', 'Partially Delivered'].includes(d.status) ? d.completedAt : null;
+    if (!done) return 'Only a delivered or returned parcel can be undone.';
+    const o = orderOf(d.orderId), c = deliveryCash(d), lock = lockedThrough();
+    if (c.handed > 0 || c.kept > 0) return 'Its cash was already received from the driver.';
+    if (Repo.count('settlementAllocs', 'deliveryId', d.id)) return 'The courier already settled this order.';
+    if (casesOf(o).length) return 'This order has a return or exchange case.';
+    if (Repo.by('payments', 'orderId', o.id).some(p => p.kind === 'refund')) return 'A refund was paid on this order.';
+    if (Repo.by('deliveries', 'orderId', o.id).some(x => x.id !== d.id && x.assignedAt > d.assignedAt)) return 'The order already went out again.';
+    if (d.status === 'Partially Delivered' && d.returnStartedAt) return 'The undelivered units are already on their way back.';
+    if (lock && dateKey(done) <= lock) return `The books are closed through ${lock}.`;
+    return null;
+  },
   returnCase(o) { return linesOf(o).some(l => l.delivered - l.returned - l.pendingReturn > 0) ? null : 'No delivered units are left to return on this order.'; },
   refund(o) { const c = calc(o), owed = round2(c.paid - c.revenue); if (o.status !== 'Cancelled' && o.status !== 'Returned' && !c.deliveredAny) return 'The order is still in progress, so its payment is held as a deposit. Refund after cancellation or return.'; return owed > 0 ? null : 'No refund is owed: customer payments do not exceed recognized revenue.'; },
 };
@@ -604,6 +618,43 @@ const Commands = {
       if (open) Commands._syncShortfall(o, Repo.get('deliveries', open.deliveryId), open.reason);
     });
   },
+  /* A delivery recorded by mistake: the parcel goes back to "out for delivery" with the carrier.
+     The collection recorded with it is removed; stock does not move (it left at pickup). */
+  undoDelivered(deliveryId) {
+    return Repo.tx(() => {
+      const d = Repo.get('deliveries', deliveryId); if (!d) fail('Unknown delivery.');
+      if (!['Delivered', 'Partially Delivered'].includes(d.status)) fail(`Only a delivered parcel can be undone. ${d.id} is ${d.status}.`);
+      const why = Guards.undo(d); if (why) fail(why);
+      const o = orderOf(d.orderId), at = Clock.now();
+      for (const p of Repo.by('payments', 'deliveryId', d.id).filter(p => p.kind === 'collection')) Repo.remove('payments', p);
+      for (const it of d.items) { const l = Repo.get('lines', it.lineId); Repo.update('lines', l, { delivered: l.delivered - it.delivered }); }
+      for (const x of Repo.by('discrepancies', 'orderId', o.id).filter(x => x.type === 'Short collection' && x.status === 'Open')) Repo.update('discrepancies', x, { status: 'Resolved', resolution: 'Delivery undone', amount: 0, resolvedAt: at });
+      const last = d.attempts.at(-1);
+      Repo.update('deliveries', d, { status: 'Out for Delivery', completedAt: null, custody: d.carrierKey, codFee: 0, updatedAt: at, items: d.items.map(it => ({ ...it, delivered: 0 })), attempts: last && last.outcome !== 'Failed' ? d.attempts.slice(0, -1) : d.attempts, history: [...d.history, { at, status: 'Out for Delivery', by: activityBy(), note: 'Delivery undone' }] });
+      Repo.update('orders', o, { status: linesOf(o).some(l => l.delivered > 0) ? 'Partially Delivered' : 'Shipped', deliveredAt: null });
+      log(`${d.id}: delivery undone, back with ${carrierName(d)}`, { orderId: o.id, deliveryId: d.id, driverId: d.mode === 'driver' ? d.carrierId : undefined });
+    });
+  },
+  /* A return recorded by mistake: the restocked units come back out of stock (a correcting entry,
+     the journal is append-only) and the parcel goes back to the carrier. */
+  undoReturned(deliveryId) {
+    return Repo.tx(() => {
+      const d = Repo.get('deliveries', deliveryId); if (!d) fail('Unknown delivery.');
+      if (d.status !== 'Returned to Warehouse') fail(`Only a returned parcel can be undone. ${d.id} is ${d.status}.`);
+      const why = Guards.undo(d); if (why) fail(why);
+      const o = orderOf(d.orderId), at = Clock.now();
+      for (const it of d.items) {
+        const back = it.qty - it.delivered; if (back <= 0) continue;
+        postMovement({ item: it.sku, itemType: 'sku', qty: -back, kind: 'Return undone', key: `unreturn:${d.id}:${it.lineId}:${d.history.length}`, ref: `#${o.id} · ${d.id}`, note: 'Return recorded by mistake, units back with the carrier' });
+        const l = Repo.get('lines', it.lineId); Repo.update('lines', l, { undeliveredBack: l.undeliveredBack - back });
+      }
+      for (const p of Repo.by('payments', 'orderId', o.id).filter(p => p.ref === `FEE-${d.id}`)) Repo.remove('payments', p);
+      const to = d.completedAt ? 'Partially Delivered' : 'Out for Delivery';
+      Repo.update('deliveries', d, { status: to, custody: d.carrierKey, returnedAt: null, returnStartedAt: null, returnReason: null, shippingPaidBy: null, feeCharged: 0, updatedAt: at, history: [...d.history, { at, status: to, by: activityBy(), note: 'Return undone' }] });
+      if (o.status === 'Returned') Repo.update('orders', o, { status: d.completedAt ? 'Partially Delivered' : 'Shipped', returnedAt: null });
+      log(`${d.id}: return undone, back with ${carrierName(d)}`, { orderId: o.id, deliveryId: d.id, driverId: d.mode === 'driver' ? d.carrierId : undefined });
+    });
+  },
   /* One step from "with the carrier" to delivered: goes out for delivery first when needed. */
   quickDeliver(deliveryId, payload) {
     return Repo.tx(() => {
@@ -646,7 +697,8 @@ const Commands = {
       }
       for (const it of d.items) {
         const back = it.qty - it.delivered; if (back <= 0) continue;
-        postMovement({ item: it.sku, itemType: 'sku', qty: back, kind: 'Inspected return', key: `undelivered:${d.id}:${it.lineId}`, ref: `#${o.id} · ${d.id}`, note: 'Undelivered parcel inspected and restocked' });
+        const again = d.history.some(h => h.note === 'Return undone');
+        postMovement({ item: it.sku, itemType: 'sku', qty: back, kind: 'Inspected return', key: `undelivered:${d.id}:${it.lineId}${again ? `:${d.history.length}` : ''}`, ref: `#${o.id} · ${d.id}`, note: 'Undelivered parcel inspected and restocked' });
         const l = Repo.get('lines', it.lineId); Repo.update('lines', l, { undeliveredBack: l.undeliveredBack + back }); n += back;
       }
       const who = { business: 'business pays the shipping', waived: 'no shipping cost (carrier waived it)', customer: `customer pays a ${money(fee)} shipping fee${paidTo === 'unpaid' ? ', not paid yet' : paidTo === 'carrier' ? `, paid to ${carrierName(d)}` : ', paid to the business'}` }[paidBy];

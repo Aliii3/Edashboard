@@ -119,6 +119,7 @@ function deliveryActions(d) {
     case 'Partially Delivered': add('Start return of undelivered units', 'returnStart', d.id, null, 1); break;
     case 'Return in Transit': add('Receive at warehouse', 'receive', d.id, null, 1); break;
   }
+  if (['Delivered', 'Partially Delivered', 'Returned to Warehouse'].includes(d.status) && !d.returnStartedAt) add(d.status === 'Returned to Warehouse' ? 'Undo return' : 'Undo delivery', 'undoModal', d.id, Guards.undo(d));
   if (d.completedAt && due > tol()) add('Record collection', 'collectModal', d.id, null, !a.length);
   if (d.mode === 'courier' && !TERMINAL_DELIVERY.has(d.status)) add(d.tracking ? 'Edit tracking no.' : 'Add tracking no.', 'trackingModal', d.id);
   return a;
@@ -168,27 +169,31 @@ function shippingView() {
     },
     /* Every parcel out with a driver or courier, with the two outcomes: delivered or returned. */
     'With carriers': () => {
-      const out = active.filter(d => d.pickedUpAt && d.status !== 'Handed Over'), carriers = [...new Map(out.map(d => [d.carrierKey, d])).values()];
+      const out = active.filter(d => d.pickedUpAt && d.status !== 'Handed Over'), carriers = [...new Map(out.map(d => [d.carrierKey, d])).values()], couriers = Repo.all('couriers');
+      const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString(), recent = all.filter(d => (d.status === 'Returned to Warehouse' ? d.returnedAt : ['Delivered', 'Partially Delivered'].includes(d.status) ? d.completedAt : '') >= weekAgo);
       const rows = out.filter(d => (!st.carrier || d.carrierKey === st.carrier) && (!st.gov || govOf(orderOf(d.orderId).area) === st.gov));
       const canDeliver = d => !['Return in Transit', 'Partially Delivered'].includes(d.status), ticks = rows.filter(canDeliver).map(d => d.orderId), picked = ticks.filter(id => ui.selected.has(id));
       const outcome = d => d.status === 'Return in Transit' || d.status === 'Partially Delivered' ? btn('Returned', 'returnedModal', d.id, { cls: 'small' }) : btn('Delivered', 'deliveredModal', d.id, { cls: 'small primary' }) + btn('Returned', 'returnedModal', d.id, { cls: 'small' });
       return note('Record each parcel as Delivered (in full or in part) or Returned. Cash a driver collects goes on their balance. Receive it under Finance → Driver cash, where their commission is deducted.')
         + `<section class="card"><div class="filters">${sel('ship.carrier', 'Driver or courier', [['', 'All'], ...carriers.map(d => [d.carrierKey, carrierName(d)])], 'wc')}${sel('ship.gov', 'Governorate', [['', 'All'], ...[...new Set(out.map(d => govOf(orderOf(d.orderId).area)).filter(Boolean))]], 'wc')}<span class="muted small">${rows.length} parcels</span><div class="spacer"></div>${btn(picked.length ? `Mark ${picked.length} delivered` : 'Mark selected delivered', 'bulkDeliveredModal', picked, { cls: 'primary', why: picked.length ? '' : 'Tick the delivered orders first.' })}</div>${grid('wc', rows, [
           { k: 'sel', label: () => `<input type="checkbox" aria-label="Select all" data-selall="${esc(JSON.stringify(ticks))}" ${ticks.length && picked.length === ticks.length ? 'checked' : ''}>`, render: d => canDeliver(d) ? `<input type="checkbox" aria-label="Select order ${d.orderId}" data-sel="${d.orderId}" ${ui.selected.has(d.orderId) ? 'checked' : ''}>` : '' },
-          { k: 'id', label: 'Order', sort: d => d.orderId, render: d => `${orderA(d.orderId)}<br><small>${esc(d.id)}</small>` },
+          { k: 'id', label: 'Order', sort: d => d.orderId, render: d => `${orderA(d.orderId)}<br><small>${esc(d.tracking || d.id)}</small>` },
           { k: 'c', label: 'Customer', render: d => { const c = customerOf(orderOf(d.orderId)); return `${custA(c)}<br><small>${esc(c.phone)}</small>`; } },
           { k: 'ad', label: 'Governorate / address', wrap: true, render: d => { const x = orderOf(d.orderId); return `${areaLabel(x.area)}<br><small>${esc(x.address)}</small>`; } },
           { k: 'car', label: 'Carrier', sort: d => carrierName(d), render: d => carrierA(d) },
           { k: 'st', label: 'Status', sort: d => d.status, render: d => badge(d.status) },
           { k: 'ex', label: 'To collect', num: true, sort: d => expectedFromCustomer(d), render: d => m(expectedFromCustomer(d)) },
           { k: 'ac', label: '', render: outcome },
-        ], { sort: 'id', dir: 1, empty: 'No parcels are out with a carrier.' })}</section>`;
-    },
-    'External couriers': () => {
-      const couriers = Repo.all('couriers');
-      const rows = active.filter(d => d.mode === 'courier' && (!st.courier || d.carrierId === st.courier));
-      return `<div class="grid thirds">${couriers.map(c => { const s = courierSummary(c), sent = s.deliveries.filter(d => d.pickedUpAt), done = sent.filter(d => d.completedAt).length, closed = sent.filter(d => d.completedAt || d.returnedAt).length, fails = sent.reduce((n, d) => n + d.attempts.filter(a => a.outcome === 'Failed').length, 0); return card(esc(c.name), pad(`<div class="triad two"><div><small>Delivered / closed</small><strong>${done} / ${closed}</strong></div><div><small>Success rate</small><strong>${closed ? Math.round(done / closed * 100) + '%' : '—'}</strong></div></div>${row('Failed attempts', fails)}${row('Shipping and return charges', m(s.deductions))}${row('Customer cash with courier', m(s.customer))}${row('Outstanding settlement', m(s.gap))}<div class="actions mt">${btn('Reconcile →', 'goFinance', ['Courier reconciliation', { courier: c.id }], { cls: 'small' })}${btn('Edit', 'courierModal', c.id, { cls: 'small' })}</div>`), `${m(c.shipRate)} ship · ${m(c.returnRate)} return · ${m(c.codFee)} COD fee. Status entered manually, no API.`); }).join('')}</div>`
-        + `<section class="card"><div class="cardhead"><div><h2>Active shipments</h2><p>Update status by hand or import later. No tracking feed is connected.</p></div><div class="actions">${btn('+ Courier', 'courierModal')}</div></div><div class="filters">${sel('ship.courier', 'Courier', courierOptions(), 'cs')}</div>${grid('cs', rows, deliveryCols({ carrier: true }), { sort: 'st', empty: 'No active courier shipments.' })}</section>`;
+        ], { sort: 'id', dir: 1, empty: 'No parcels are out with a carrier.' })}</section>`
+        /* A Delivered or Returned recorded by mistake can be undone for a week, until its money moves on. */
+        + `<div class="sp"></div>` + card('Delivered or returned in the last 7 days', grid('wc-done', recent, [
+          { k: 'id', label: 'Order', sort: d => d.orderId, render: d => `${orderA(d.orderId)}<br><small>${esc(d.tracking || d.id)}</small>` },
+          { k: 'c', label: 'Customer', render: d => custA(customerOf(orderOf(d.orderId))) },
+          { k: 'car', label: 'Carrier', render: d => carrierA(d) },
+          { k: 'st', label: 'Status', sort: d => d.status, render: d => `${badge(d.status)}<br><small>${fdt(d.returnedAt || d.completedAt)}</small>` },
+          { k: 'ac', label: '', render: d => btn('Undo', 'undoModal', d.id, { cls: 'small', why: Guards.undo(d) || '' }) },
+        ], { sort: 'st', size: 10, empty: 'Nothing delivered or returned this week.' }), 'Undo puts the parcel back with the carrier')
+        + `<div class="sp"></div><section class="card"><div class="cardhead"><div><h2>Couriers</h2><p>Rates and results for each courier. Statuses are entered by hand, no tracking feed is connected.</p></div><div class="actions">${btn('+ Courier', 'courierModal')}</div></div>${pad(`<div class="grid thirds nomb">${couriers.map(c => { const s = courierSummary(c), sent = s.deliveries.filter(d => d.pickedUpAt), done = sent.filter(d => d.completedAt).length, closed = sent.filter(d => d.completedAt || d.returnedAt).length, fails = sent.reduce((n, d) => n + d.attempts.filter(a => a.outcome === 'Failed').length, 0); return card(esc(c.name), pad(`<div class="triad two"><div><small>Delivered / closed</small><strong>${done} / ${closed}</strong></div><div><small>Success rate</small><strong>${closed ? Math.round(done / closed * 100) + '%' : '—'}</strong></div></div>${row('Failed attempts', fails)}${row('Shipping and return charges', m(s.deductions))}${row('Customer cash with courier', m(s.customer))}${row('Outstanding settlement', m(s.gap))}<div class="actions mt">${btn('Reconcile →', 'goFinance', ['Courier reconciliation', { courier: c.id }], { cls: 'small' })}${btn('Edit', 'courierModal', c.id, { cls: 'small' })}</div>`), `${m(c.shipRate)} ship · ${m(c.returnRate)} return · ${m(c.codFee)} COD fee. Status entered manually, no API.`); }).join('')}</div>`)}</section>`;
     },
     'Private delivery': () => {
       const list = Repo.all('drivers').filter(d => (!q || `${d.name} ${d.phone} ${d.zones}`.toLowerCase().includes(q)) && (!st.avail || (st.avail === 'Inactive' ? d.active === false : d.active !== false && d.availability === st.avail)));

@@ -6,7 +6,7 @@ const OPS = 'operations', WH = 'warehouse', FIN = 'finance', DRV = 'driver', EMP
 export const COMMAND_ROLES = {
   createOrder: [OPS], createOrderWithCustomer: [OPS], importOrders: [OPS], addOrderNote: [OPS, WH, FIN], confirmOrder: [OPS], advanceOrder: [OPS, WH], cancelOrder: [OPS],
   attribute: [FIN],
-  assign: [OPS], shipOrder: [OPS], setTracking: [OPS, WH], storeSale: [OPS], reassign: [OPS], driverHandover: [OPS], pickup: [OPS, WH], setDeliveryStatus: [OPS, DRV], deliver: [OPS, DRV], quickDeliver: [OPS], quickReturn: [OPS, WH], collect: [OPS, FIN, DRV], prepay: [OPS, FIN], startReturn: [OPS, DRV], receiveAtWarehouse: [OPS, WH],
+  assign: [OPS], shipOrder: [OPS], setTracking: [OPS, WH], storeSale: [OPS], reassign: [OPS], driverHandover: [OPS], pickup: [OPS, WH], setDeliveryStatus: [OPS, DRV], deliver: [OPS, DRV], quickDeliver: [OPS], quickReturn: [OPS, WH], undoDelivered: [OPS], undoReturned: [OPS, WH], collect: [OPS, FIN, DRV], prepay: [OPS, FIN], startReturn: [OPS, DRV], receiveAtWarehouse: [OPS, WH],
   recordHandover: [FIN], addDriverExpense: [OPS, FIN, DRV], decideDriverExpense: [FIN], resolveDiscrepancy: [FIN], recordSettlement: [FIN], refund: [FIN],
   openCase: [OPS], acceptReturn: [OPS, WH], rejectCase: [OPS, WH], createReplacement: [OPS], closeCase: [OPS, FIN],
   adjustStock: [OPS, WH], createProduction: [OPS, WH], startProduction: [OPS, WH], completeProduction: [OPS, WH], cancelProduction: [OPS, WH], saveSku: [OPS], saveMaterial: [OPS], receiveMaterial: [OPS, WH],

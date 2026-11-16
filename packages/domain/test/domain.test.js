@@ -255,3 +255,35 @@ test('leave: days skip weekly days off, annual balance, approval and planned day
   assert.equal(plannedStatus(e(), '2027-03-11'), null);
   assert.deepEqual(integrity().filter(x => !x.ok), []);
 });
+
+test('undo Delivered and Returned: everything goes back, and is refused once the cash moved on', async () => {
+  const { Guards, orderOf } = await import('../src/index.js');
+  buildSeedWorkspace();
+  const throws = (fn, re) => assert.throws(fn, e => e instanceof Rule && (!re || re.test(e.message)), String(re));
+  const cust = Repo.all('customers')[0], drv = Repo.all('drivers').find(d => d.active !== false && d.availability !== 'Off duty').id;
+  Commands.adjustStock({ item: 'TEE-IVR', itemType: 'sku', qty: 10, reason: 't' });
+  const ready = () => { const o = Commands.createOrder({ customerId: cust.id, lines: [{ sku: 'TEE-IVR', qty: 2 }], channel: 'Phone', paymentMethod: 'COD' }); Commands.confirmOrder(o.id); Commands.advanceOrder(o.id, 'Processing'); Commands.advanceOrder(o.id, 'Ready'); return o; };
+  const full = d => Object.fromEntries(d.items.map(i => [i.lineId, i.qty]));
+  const snap = () => ({ rev: totals().revenue, cash: driverCash(drv).outstanding, stock: stockOnHand('TEE-IVR') });
+  /* Undo a delivery: revenue, the driver's cash and the order status return to before. */
+  const a = ready(), da = Commands.shipOrder(a.id, 'driver', drv, { then: 'out' }), before = snap();
+  Commands.quickDeliver(da.id, { quantities: full(da), collection: { amount: round2(calc(orderOf(a.id)).value), method: 'Cash' } });
+  assert.notDeepEqual(snap(), before);
+  Commands.undoDelivered(da.id);
+  assert.deepEqual(snap(), before); assert.equal(Repo.get('deliveries', da.id).status, 'Out for Delivery'); assert.equal(orderOf(a.id).status, 'Shipped');
+  throws(() => Commands.undoDelivered(da.id), /Only a delivered parcel/);
+  /* Delivered again, then the cash is received: now it can't be undone. */
+  Commands.quickDeliver(da.id, { quantities: full(da), collection: { amount: round2(calc(orderOf(a.id)).value), method: 'Cash' } });
+  Commands.recordHandover({ driverId: drv, ref: 'T-UNDO-1', receivedBy: 'T', allocations: [{ deliveryId: da.id, commission: 0 }] });
+  assert.match(Guards.undo(Repo.get('deliveries', da.id)), /already received/);
+  throws(() => Commands.undoDelivered(da.id), /already received/);
+  /* Undo a return: the restocked units leave stock again, and the parcel can be returned a second time. */
+  const b = ready(), db = Commands.shipOrder(b.id, 'driver', drv, { then: 'out' }), out = stockOnHand('TEE-IVR');
+  Commands.quickReturn(db.id, { reason: 'Customer refused', shipping: 'business' });
+  assert.equal(stockOnHand('TEE-IVR'), out + 2);
+  Commands.undoReturned(db.id);
+  assert.equal(stockOnHand('TEE-IVR'), out); assert.equal(Repo.get('deliveries', db.id).status, 'Out for Delivery'); assert.equal(orderOf(b.id).status, 'Shipped');
+  Commands.quickReturn(db.id, { reason: 'Customer not available', shipping: 'business' });
+  assert.equal(stockOnHand('TEE-IVR'), out + 2, 'returned again after the undo');
+  assert.deepEqual(integrity().filter(x => !x.ok), []);
+});

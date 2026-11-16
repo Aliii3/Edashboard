@@ -293,6 +293,11 @@ const A = {
   failModal(id) { modal(`Failed attempt · ${id}`, `${note('The parcel stays in the carrier\'s custody. It only returns to stock when received at the warehouse.')}<div class="formgrid">${selectF('Reason', 'reason', FAILURE_REASONS)}${field('Note', 'note', 'text', '', 'maxlength="200"')}</div>`, async f => { await Commands.setDeliveryStatus(id, 'Failed Attempt', { reason: f.reason, note: f.note }); toast('Failed attempt recorded.'); }, 'Record attempt'); },
   retryModal(id) { modal(`Schedule retry · ${id}`, `<div class="formgrid">${field('Retry date', 'date', 'date', dayShift(today(), 1), `required min="${today()}"`)}${field('Note', 'note', 'text', '', 'maxlength="200"')}</div>`, async f => { await Commands.setDeliveryStatus(id, 'Retry Scheduled', { retryAt: new Date(f.date + 'T18:00:00Z').toISOString(), note: f.note }); toast('Retry scheduled.'); }, 'Schedule'); },
   deliveredModal(id) { A.deliverModal(id, true); },
+  /* Undo a Delivered or Returned recorded by mistake: the parcel goes back to the carrier. */
+  undoModal(id) {
+    const d = Repo.get('deliveries', id), ret = d.status === 'Returned to Warehouse';
+    modal(ret ? `Undo the return of #${d.orderId}?` : `Undo the delivery of #${d.orderId}?`, `<p>${ret ? 'The units restocked from this parcel leave stock again, any shipping fee charged on it is removed, and the parcel goes back out for delivery.' : 'The payment recorded with this delivery is removed, revenue goes back, and the parcel goes back out for delivery.'}</p>${row('Back with', esc(carrierName(d)))}<p class="inlinehelp">Then record what really happened.</p>`, async () => { await Commands[ret ? 'undoReturned' : 'undoDelivered'](id); toast(ret ? 'Return undone. The parcel is back with the carrier.' : 'Delivery undone. The parcel is back with the carrier.'); }, ret ? 'Undo return' : 'Undo delivery', { danger: true });
+  },
   /* Several parcels delivered in full, each with the cash due collected. */
   bulkDeliveredModal(orderIds) {
     const ds = orderIds.map(id => activeDelivery(orderOf(id))).filter(d => d && !['Partially Delivered', 'Return in Transit'].includes(d.status));
