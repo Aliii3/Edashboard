@@ -194,7 +194,7 @@ test('in-store sales, one-step shipping, tracking, attendance and product figure
 });
 
 test('board shipping: one-step delivered and returned, per-order commission kept at handover', async () => {
-  const { carrierCharge, govOf, orderOf, AREAS, SEED_AREAS } = await import('../src/index.js');
+  const { carrierCharge, govOf, orderOf, AREAS, SEED_AREAS, stockOnHand, accountLedger, trialBalance, incomeStatement } = await import('../src/index.js');
   buildSeedWorkspace();
   const throws = (fn, re) => assert.throws(fn, e => e instanceof Rule && (!re || re.test(e.message)), String(re));
   assert.equal(govOf('New Cairo'), 'Cairo'); assert.equal(govOf('6th of October'), 'Giza');
@@ -218,8 +218,32 @@ test('board shipping: one-step delivered and returned, per-order commission kept
   /* Returned in one step from Picked Up. */
   const b = ready(), db = Commands.shipOrder(b.id, 'driver', drv, { then: 'picked' });
   throws(() => Commands.quickReturn(db.id, { reason: 'Nope' }), /why it came back/);
+  /* Returned is "on its way back": stock only goes up when the parcel is received at the warehouse. */
+  const onHand = stockOnHand('TEE-IVR');
   Commands.quickReturn(db.id, { reason: 'Customer refused', shipping: 'business' });
+  assert.equal(Repo.get('deliveries', db.id).status, 'Return in Transit');
+  assert.equal(stockOnHand('TEE-IVR'), onHand, 'not restocked before it is received');
+  throws(() => Commands.quickReturn(db.id, { reason: 'Customer refused' }), /already on its way back/);
+  Commands.receiveAtWarehouse(db.id);
   assert.equal(Repo.get('deliveries', db.id).status, 'Returned to Warehouse');
+  assert.equal(Repo.get('deliveries', db.id).returnReason, 'Customer refused', 'the reason recorded at Returned is kept');
+  assert.equal(stockOnHand('TEE-IVR'), onHand + 1);
+  /* The cost of a parcel that came back is a return shipping cost in the accounts. */
+  assert.ok(accountLedger('6200').rows.some(e => e.why.includes(db.id)), 'return cost visible in account 6200');
+  /* Partial return: the customer kept one item and paid the delivery fee with it, so the shipping is theirs
+     and "who pays" is not asked. */
+  Commands.adjustStock({ item: 'TEE-IVR', itemType: 'sku', qty: 2, reason: 't' });
+  const p = Commands.createOrder({ customerId: cust.id, lines: [{ sku: 'TEE-IVR', qty: 2 }], channel: 'Phone', paymentMethod: 'COD', deliveryFee: 50 }); Commands.confirmOrder(p.id); Commands.advanceOrder(p.id, 'Processing'); Commands.advanceOrder(p.id, 'Ready');
+  const dp = Commands.shipOrder(p.id, 'driver', drv, { then: 'out' });
+  Commands.deliver(dp.id, { quantities: { [dp.items[0].lineId]: 1 }, reason: 'Kept one' });
+  const feeRev = calc(orderOf(p.id)).entries.filter(e => e.tag === 'fee').reduce((s, e) => s + e.amt, 0);
+  Commands.quickReturn(dp.id, { reason: 'Customer refused', shipping: 'business' });
+  Commands.receiveAtWarehouse(dp.id);
+  const dpx = Repo.get('deliveries', dp.id);
+  assert.equal(dpx.shippingPaidBy, 'customer'); assert.equal(dpx.feeCharged, 0);
+  assert.equal(feeRev, 50); assert.equal(calc(orderOf(p.id)).entries.filter(e => e.tag === 'fee').reduce((s, e) => s + e.amt, 0), 50, 'the delivery fee stays counted');
+  const tb = trialBalance();
+  assert.equal(tb.debit, tb.credit, 'trial balance balances'); assert.equal(incomeStatement().profit, totals().profit, 'accounts agree with P&L');
   /* Cash handover for one ticked order with its own commission: the driver keeps it, hands over the rest,
      and the trip's shipping cost becomes that commission. */
   const cash = driverCash(drv).outstanding, profit = totals().profit, before = carrierCharge(Repo.get('deliveries', da.id));
@@ -279,11 +303,11 @@ test('undo Delivered and Returned: everything goes back, and is refused once the
   throws(() => Commands.undoDelivered(da.id), /already received/);
   /* Undo a return: the restocked units leave stock again, and the parcel can be returned a second time. */
   const b = ready(), db = Commands.shipOrder(b.id, 'driver', drv, { then: 'out' }), out = stockOnHand('TEE-IVR');
-  Commands.quickReturn(db.id, { reason: 'Customer refused', shipping: 'business' });
+  Commands.quickReturn(db.id, { reason: 'Customer refused', shipping: 'business' }); Commands.receiveAtWarehouse(db.id);
   assert.equal(stockOnHand('TEE-IVR'), out + 2);
   Commands.undoReturned(db.id);
   assert.equal(stockOnHand('TEE-IVR'), out); assert.equal(Repo.get('deliveries', db.id).status, 'Out for Delivery'); assert.equal(orderOf(b.id).status, 'Shipped');
-  Commands.quickReturn(db.id, { reason: 'Customer not available', shipping: 'business' });
+  Commands.quickReturn(db.id, { reason: 'Customer not available', shipping: 'business' }); Commands.receiveAtWarehouse(db.id);
   assert.equal(stockOnHand('TEE-IVR'), out + 2, 'returned again after the undo');
   assert.deepEqual(integrity().filter(x => !x.ok), []);
 });

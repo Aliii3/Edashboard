@@ -16,6 +16,8 @@ function field(label, name, type = 'text', value = '', extra = '') { return `<la
 function selectF(label, name, options, value = '', extra = '') { return `<label class="field">${label}<select name="${name}" ${extra}>${options.map(o => { const [v, t] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}" ${String(v) === String(value) ? 'selected' : ''}>${esc(t)}</option>`; }).join('')}</select></label>`; }
 const textF = (label, name, value = '', extra = '') => `<label class="field full">${label}<textarea name="${name}" ${extra}>${esc(value)}</textarea></label>`;
 let modalLive = null;
+/* Who carried the shipping on a parcel that came back. */
+const shippingLabel = d => d.shippingPaidBy === 'customer' && !d.feeCharged ? 'customer already paid it with the items they kept' : { business: 'business paid the shipping', waived: 'no shipping cost', customer: `customer charged ${m(d.feeCharged)}` }[d.shippingPaidBy || 'business'];
 function modal(title, body, submit, label = 'Save', o = {}) {
   const d = document.getElementById('dialog'); modalLive = null;
   d.className = o.wide ? 'wide' : '';
@@ -172,18 +174,20 @@ const A = {
   bulkPrint(kind) { A.printModal([...ui.selected], kind); },
   assignModal(ids) { A.shipModal(ids); },
   /* Assign a packed order and, in the same step, record the pickup and send it out. */
-  shipModal(ids) {
+  /* Every carrier is a driver (مندوب). Shipping companies stay in past records only. */
+  shipModal(ids, pick) {
     ids = (Array.isArray(ids) ? ids : [ids]).map(Number); const many = ids.length > 1;
     if (!ids.length) return toast('Select one or more orders first.', 'bad');
-    modal(many ? `Ship ${ids.length} orders` : `Ship order #${ids[0]}`, `${note('Only Ready orders can be shipped: packed, with stock reserved. Any other order is skipped and explained.')}<div class="formgrid">${selectF('Fulfillment', 'mode', [['driver', 'Private delivery'], ['courier', 'External courier']], S().defaultFulfillment, 'data-assign-mode="1"')}<label class="field" data-show="driver">Driver<select name="driver">${Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty').map(d => `<option value="${d.id}">${esc(d.name)} · ${esc(d.availability)} · ${driverStats(d.id).custody} in custody</option>`).join('')}</select></label><label class="field" data-show="courier">Courier<select name="courier">${Repo.all('couriers').filter(c => c.active !== false).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>${many ? '' : '<label class="field" data-show="courier">Tracking no. (optional)<input name="tracking" maxlength="60"></label>'}</div><p class="inlinehelp">The carrier takes the parcel now and stock is deducted. The commission is entered per order when you receive the cash.</p>
+    const drivers = Repo.all('drivers').filter(d => d.active !== false && d.availability !== 'Off duty');
+    modal(many ? `Ship ${ids.length} orders` : `Ship order #${ids[0]}`, `${note('Only Ready orders can be shipped: packed, with stock reserved. Any other order is skipped and explained.')}<div class="formgrid"><label class="field">Driver<select name="driver" required>${drivers.map(d => `<option value="${d.id}" ${d.id === pick ? 'selected' : ''}>${esc(d.name)} · ${esc(d.availability)} · ${driverStats(d.id).custody} in custody</option>`).join('')}</select></label></div>${drivers.length ? '' : '<p class="inlinehelp">No driver is available. Create one first.</p>'}<div class="actions">${btn('+ New driver', 'driverModal', [null, ids])}</div><p class="inlinehelp">The driver takes the parcel now and stock is deducted. The commission is entered per order when you receive the cash.</p>
       <label class="checkrow mt"><input type="checkbox" name="print"> Print shipping labels afterwards</label>`, async f => {
+      if (!f.driver) fail('Choose a driver, or create one with + New driver.');
       const r = [], done = [];
-      for (const id of ids) { try { await Commands.shipOrder(id, f.mode, f.mode === 'driver' ? f.driver : f.courier, { tracking: f.tracking, then: f.mode === 'driver' ? 'out' : 'picked' }); ui.selected.delete(id); done.push(id); r.push(null); } catch (e) { r.push(many && !e.message.startsWith('#') ? `#${id}: ${e.message}` : e.message); } }
+      for (const id of ids) { try { await Commands.shipOrder(id, 'driver', f.driver, { then: 'out' }); ui.selected.delete(id); done.push(id); r.push(null); } catch (e) { r.push(many && !e.message.startsWith('#') ? `#${id}: ${e.message}` : e.message); } }
       if (!many && r[0]) fail(r[0]);
       if (f.print && done.length) printDocs(done, 'label', printPref().size);
       closeModal(); bulkReport('shipped', r); return false;
     }, many ? 'Ship orders' : 'Ship');
-    syncAssign();
   },
   printModal(ids, kind) {
     ids = (Array.isArray(ids) ? ids : [ids]).map(Number).filter(id => orderOf(id));
@@ -255,7 +259,7 @@ const A = {
     const d = Repo.get('deliveries', id), o = orderOf(d.orderId), c = customerOf(o), cash = deliveryCash(d), acts = deliveryActions(d), pred = d.predecessorId, succ = d.successorId;
     modal(`Delivery ${d.id}`, `<div class="kpi-grid k2 mb">${kpi('Status', badge(d.status) + (isOverdue(d) ? ' <span class="flag">Overdue</span>' : ''), isOverdue(d) ? overdueWhy(d) : `Updated ${fdt(d.updatedAt)}`)}${kpi('Parcel custody', custodyLabel(d.custody), d.mode === 'driver' ? 'Private delivery' : 'External courier')}</div>
       ${row('Order', orderA(o.id))}${row('Carrier', carrierA(d))}${row('Customer', `${custA(c)} · ${esc(c.phone)}`)}<p class="subtitle">${esc(o.address)}${o.instructions ? `<br><strong>Instructions:</strong> ${esc(o.instructions)}` : ''}</p>
-      ${row('Items', d.items.map(i => `${i.delivered ? `${i.delivered}/` : ''}${i.qty} × ${esc(i.sku)}`).join(', '))}${row('Expected from customer', m(expectedFromCustomer(d)))}${row('Collected', `${m(cash.collected)}${cash.method ? ' · ' + esc(cash.method) : ''}`)}${d.mode === 'driver' ? row('Cash not yet handed over', m(cash.unhanded)) : ''}${row('Delivery cost incurred', d.shippingPaidBy === 'waived' ? `${m(0)} <small>waived by the carrier</small>` : m(d.pickedUpAt ? d.cost : 0))}${d.returnedAt ? row('Came back', `${esc(d.returnReason || 'No reason recorded')} · ${{ business: 'business paid the shipping', waived: 'no shipping cost', customer: `customer charged ${m(d.feeCharged)}` }[d.shippingPaidBy || 'business']}`) : ''}${d.tracking ? row('Tracking no.', esc(d.tracking)) : ''}${pred ? row('Follows', esc(pred)) : ''}${succ ? row('Handed to', esc(succ)) : ''}${d.retryAt ? row('Retry scheduled', fd(d.retryAt)) : ''}
+      ${row('Items', d.items.map(i => `${i.delivered ? `${i.delivered}/` : ''}${i.qty} × ${esc(i.sku)}`).join(', '))}${row('Expected from customer', m(expectedFromCustomer(d)))}${row('Collected', `${m(cash.collected)}${cash.method ? ' · ' + esc(cash.method) : ''}`)}${d.mode === 'driver' ? row('Cash not yet handed over', m(cash.unhanded)) : ''}${row('Delivery cost incurred', d.shippingPaidBy === 'waived' ? `${m(0)} <small>waived by the carrier</small>` : m(d.pickedUpAt ? d.cost : 0))}${d.returnedAt || d.shippingPaidBy ? row(d.returnedAt ? 'Came back' : 'On its way back', `${esc(d.returnReason || 'No reason recorded')} · ${shippingLabel(d)}`) : ''}${d.tracking ? row('Tracking no.', esc(d.tracking)) : ''}${pred ? row('Follows', esc(pred)) : ''}${succ ? row('Handed to', esc(succ)) : ''}${d.retryAt ? row('Retry scheduled', fd(d.retryAt)) : ''}
       <div class="actions mt mb">${acts.map(x => btn(x.label, x.name, x.arg, { cls: x.primary ? 'primary small' : 'small', why: x.why })).join('') || '<span class="muted">No further actions: this assignment is closed.</span>'}</div>
       <h3 class="mt">Timeline</h3><div class="timeline tight">${[...d.history].reverse().map(h => `<div class="event"><strong>${esc(h.status)}</strong>${h.note ? ` <span class="muted">${esc(h.note)}</span>` : ''}<p>${fdt(h.at)} · ${esc(h.by)}</p></div>`).join('')}</div>`, null, '', { wide: true });
   },
@@ -266,25 +270,30 @@ const A = {
   returnedModal(id) { A.receive(id, true); },
   receive(id, quick = false) {
     const d = Repo.get('deliveries', id), o = orderOf(d.orderId), partial = d.items.some(i => i.delivered > 0), suggested = o.deliveryFee || d.cost || 0;
-    const opt = (v, t, sub, on) => `<label class="choice"><input type="radio" name="shipping" value="${v}" ${on ? 'checked' : ''} ${v === 'waived' && partial ? 'disabled' : ''}><span><strong>${t}</strong><small>${sub}</small></span></label>`;
-    modal(`Receive ${esc(d.id)} at the warehouse`, `${note(`Undelivered units go back into stock. Order #${o.id} · ${esc(carrierName(d))}.`)}
+    /* Marked Returned already: why and who pays were recorded then, so receiving is one confirmation. */
+    if (!quick && d.shippingPaidBy) {
+      return modal(`Receive ${esc(d.id)} at the warehouse`, `${note(`The units the customer did not keep go back into stock now. Order #${o.id} · ${esc(carrierName(d))}.`)}${row('Why it came back', esc(d.returnReason || 'No reason recorded'))}${row('Shipping', shippingLabel(d))}${textF('Note (optional)', 'note', '', 'maxlength="200"')}`,
+        async f => { await Commands.receiveAtWarehouse(id, f.note); toast('Received at the warehouse. Units back in stock.'); }, 'Received at warehouse');
+    }
+    const opt = (v, t, sub, on) => `<label class="choice"><input type="radio" name="shipping" value="${v}" ${on ? 'checked' : ''}><span><strong>${t}</strong><small>${sub}</small></span></label>`;
+    modal(quick ? `Returned · order #${o.id}` : `Receive ${esc(d.id)} at the warehouse`, `${note(quick ? `The parcel is marked as on its way back from ${esc(carrierName(d))}. Stock only goes up when you press Received at warehouse.` : `Undelivered units go back into stock. Order #${o.id} · ${esc(carrierName(d))}.`)}
       <div class="formgrid">${selectF('Why did it come back?', 'reason', [['', 'Choose a reason'], ...RETURN_REASONS])}</div>
-      <h3 class="mt">Who pays the shipping?</h3><div class="choices">
+      ${partial ? `<h3 class="mt">Shipping</h3><p class="inlinehelp">The customer kept part of the order and already paid the shipping with it, so nothing more is charged and it is not a company cost.</p><input type="hidden" name="shipping" value="customer">` : `<h3 class="mt">Who pays the shipping?</h3><div class="choices">
         ${opt('business', 'The business', `Delivery ${m(d.pickedUpAt ? d.cost : 0)} and return ${m(d.returnCost || 0)} are business costs.`, true)}
-        ${opt('waived', 'No cost', partial ? 'Not available: part of this parcel was delivered.' : 'The carrier charged nothing for this trip, so no shipping cost is booked.')}
+        ${opt('waived', 'No cost', 'The carrier charged nothing for this trip, so no shipping cost is booked.')}
         ${opt('customer', 'The customer', 'They pay a shipping fee even though they did not keep the order. It counts as revenue.')}
       </div>
-      <div class="formgrid mt" id="feeFields" hidden>${field('Shipping fee charged to the customer', 'fee', 'number', suggested || '', 'min="0.01" step="0.01"')}${selectF('Has the customer paid it?', 'paidTo', [['unpaid', 'Not yet, they owe it'], ['carrier', `Yes, to ${carrierName(d)} in cash`], ['business', 'Yes, directly to the business']])}</div>
+      <div class="formgrid mt" id="feeFields" hidden>${field('Shipping fee charged to the customer', 'fee', 'number', suggested || '', 'min="0.01" step="0.01"')}${selectF('Has the customer paid it?', 'paidTo', [['unpaid', 'Not yet, they owe it'], ['carrier', `Yes, to ${carrierName(d)} in cash`], ['business', 'Yes, directly to the business']])}</div>`}
       ${textF('Note (optional)', 'note', '', 'maxlength="200"')}`,
-      async f => { const outcome = { reason: f.reason, shipping: f.shipping, fee: f.shipping === 'customer' ? Number(f.fee) : undefined, paidTo: f.paidTo, note: f.note }; if (quick) { if (!f.reason) fail('Choose why it came back.'); await Commands.quickReturn(id, outcome); } else await Commands.receiveAtWarehouse(id, f.note, outcome); toast('Received at the warehouse. Undelivered units restocked.'); }, quick ? 'Record return' : 'Receive parcel');
+      async f => { const outcome = { reason: f.reason, shipping: f.shipping, fee: f.shipping === 'customer' && !partial ? Number(f.fee) : undefined, paidTo: f.paidTo, note: f.note }; if (quick) { if (!f.reason) fail('Choose why it came back.'); await Commands.quickReturn(id, outcome); toast('Marked as on its way back. Press Received at warehouse when it arrives.'); } else { await Commands.receiveAtWarehouse(id, f.note, outcome); toast('Received at the warehouse. Undelivered units restocked.'); } }, quick ? 'Record return' : 'Receive parcel');
+    if (partial) return;
     modalLive = () => { const form = document.getElementById('modalForm'), on = form.elements.shipping.value === 'customer', box = document.getElementById('feeFields'); box.hidden = !on; box.querySelector('[name=fee]').required = on; };
     modalLive();
   },
   cancelAssign(id) { closeModal(); run(() => Commands.setDeliveryStatus(id, 'Cancelled Assignment', { note: 'Assignment cancelled' }), 'Assignment cancelled. The order can be assigned again.'); },
   reassignModal(id) {
     const d = Repo.get('deliveries', id);
-    modal(`Reassign ${id}`, `${note(`Currently ${esc(carrierName(d))}. The parcel has not left the warehouse. The old assignment is kept in history.`)}<div class="formgrid">${selectF('Fulfillment', 'mode', [['driver', 'Private delivery'], ['courier', 'External courier']], d.mode, 'data-assign-mode="1"')}<label class="field" data-show="driver">Driver<select name="driver">${Repo.all('drivers').filter(x => x.active !== false && x.availability !== 'Off duty' && !(d.mode === 'driver' && x.id === d.carrierId)).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label><label class="field" data-show="courier">Courier<select name="courier">${Repo.all('couriers').filter(x => x.active !== false).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>${field('Reason (optional)', 'reason')}</div>`, async f => { await Commands.reassign(id, f.mode, f.mode === 'driver' ? f.driver : f.courier, f.reason); toast('Reassigned.'); }, 'Reassign');
-    syncAssign();
+    modal(`Reassign ${id}`, `${note(`Currently ${esc(carrierName(d))}. The parcel has not left the warehouse. The old assignment is kept in history.`)}<div class="formgrid"><label class="field">Driver<select name="driver" required>${Repo.all('drivers').filter(x => x.active !== false && x.availability !== 'Off duty' && !(d.mode === 'driver' && x.id === d.carrierId)).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>${field('Reason (optional)', 'reason')}</div>`, async f => { if (!f.driver) fail('Choose a driver.'); await Commands.reassign(id, 'driver', f.driver, f.reason); toast('Reassigned.'); }, 'Reassign');
   },
   handoffModal(id) {
     const d = Repo.get('deliveries', id), cash = deliveryCash(d);
@@ -367,7 +376,7 @@ const A = {
   },
   decideExp([id, decision]) { run(() => Commands.decideDriverExpense(id, decision), `${id} ${decision.toLowerCase()}.`); },
   resolveModal(id) { modal(`Resolve ${id}`, textF('How was this resolved?', 'res', '', 'required maxlength="200"'), async f => { await Commands.resolveDiscrepancy(id, f.res); toast('Discrepancy resolved.'); }, 'Resolve'); },
-  driverModal(id) { const d = id ? Repo.get('drivers', id) : { name: '', phone: '', vehicle: 'Motorcycle', zones: '', availability: 'Available', active: true }; modal(id ? `Edit ${esc(d.name)}` : 'New driver', `<div class="formgrid">${field('Name', 'name', 'text', d.name, 'required maxlength="60"')}${field('Mobile', 'phone', 'tel', d.phone, 'required')}${selectF('Vehicle', 'vehicle', ['Motorcycle', 'Van', 'Car', 'Bicycle'], d.vehicle)}${field('Zones', 'zones', 'text', d.zones, 'maxlength="100"')}${selectF('Availability', 'availability', ['Available', 'Busy', 'Off duty'], d.availability)}${selectF('Record state', 'state', [['active', 'Active'], ['inactive', 'Inactive, history preserved']], d.active === false ? 'inactive' : 'active')}</div>`, async f => { const rid = await Commands.saveDriver({ id, ...f, active: f.state === 'active' }); toast('Driver saved.'); if (!id) location.hash = `#/drivers/${rid}`; }); },
+  driverModal(arg) { const [id, back] = Array.isArray(arg) ? arg : [arg]; const d = id ? Repo.get('drivers', id) : { name: '', phone: '', vehicle: 'Motorcycle', zones: '', availability: 'Available', active: true }; modal(id ? `Edit ${esc(d.name)}` : 'New driver', `<div class="formgrid">${field('Name', 'name', 'text', d.name, 'required maxlength="60"')}${field('Mobile', 'phone', 'tel', d.phone, 'required')}${selectF('Vehicle', 'vehicle', ['Motorcycle', 'Van', 'Car', 'Bicycle'], d.vehicle)}${field('Zones', 'zones', 'text', d.zones, 'maxlength="100"')}${selectF('Availability', 'availability', ['Available', 'Busy', 'Off duty'], d.availability)}${selectF('Record state', 'state', [['active', 'Active'], ['inactive', 'Inactive, history preserved']], d.active === false ? 'inactive' : 'active')}</div>`, async f => { const rid = await Commands.saveDriver({ id, ...f, active: f.state === 'active' }); toast('Driver saved.'); if (back) { A.shipModal(back, rid); return false; } if (!id) location.hash = `#/drivers/${rid}`; }); },
   courierModal(id) { const c = id ? Repo.get('couriers', id) : { name: '', shipRate: 60, returnRate: 40, codFee: 15, active: true }; modal(id ? `Edit ${esc(c.name)}` : 'New courier', `<div class="formgrid">${field('Name', 'name', 'text', c.name, 'required maxlength="60"')}${field('Ship rate', 'shipRate', 'number', c.shipRate, 'min="0" required')}${field('Return rate', 'returnRate', 'number', c.returnRate, 'min="0" required')}${field('COD fee', 'codFee', 'number', c.codFee, 'min="0" required')}${selectF('State', 'state', [['active', 'Active'], ['inactive', 'Inactive']], c.active === false ? 'inactive' : 'active')}</div><p class="inlinehelp">Rates apply to new assignments. Past deliveries keep their cost.</p>`, async f => { await Commands.saveCourier({ id, ...f, active: f.state === 'active' }); toast('Courier saved.'); }); },
   /* A courier's payment: tick the deliveries it covers, or let their statement tick them. */
   /* pay: the business pays the courier their charges (deliveries where we owe them). Stored as negative nets, shown positive. */
@@ -536,7 +545,6 @@ function bulkReport(verb, results, keepSelection = false) {
   render();
   modal(`${ok} ${verb}, ${bad.length} skipped`, `<ul class="plain">${bad.slice(0, 30).map(x => `<li>${esc(x)}</li>`).join('')}</ul>${bad.length > 30 ? `<p class="inlinehelp">And ${bad.length - 30} more.</p>` : ''}`, null);
 }
-function syncAssign() { const f = document.getElementById('modalForm'); if (!f) return; const mode = f.elements.mode?.value; f.querySelectorAll('[data-show]').forEach(el => { el.hidden = el.dataset.show !== mode; }); }
 
 /* ---------- Courier statement matching ---------- */
 const ticked = () => [...document.querySelectorAll('#modalForm [data-alloc]')].filter(el => document.querySelector(`#modalForm [data-inc="${el.dataset.alloc}"]`)?.checked);
@@ -605,4 +613,4 @@ async function handleCsv(file) {
   } catch (err) { el.innerHTML = `<p class="form-error">${esc(err instanceof Rule ? err.message : 'That file could not be read.')}</p>`; }
 }
 
-export { normRef, parseTable, printPref, toAmount, A, CSV_COLUMNS, allocInputsTotal, bulkReport, closeModal, csvCell, customerOptionsFor, dateToIso, download, field, globalSearch, handleCsv, lineSum, modal, modalLive, nowLocal, orderDraft, parseCSV, pendingImport, prepareImport, renderDraftLines, run, selectF, syncAssign, textF, toCsv, toast };
+export { normRef, parseTable, printPref, toAmount, A, CSV_COLUMNS, allocInputsTotal, bulkReport, closeModal, csvCell, customerOptionsFor, dateToIso, download, field, globalSearch, handleCsv, lineSum, modal, modalLive, nowLocal, orderDraft, parseCSV, pendingImport, prepareImport, renderDraftLines, run, selectF, textF, toCsv, toast };

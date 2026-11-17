@@ -120,9 +120,11 @@ function orderEntries(o) {
   const ls = linesOf(o), units = new Map(ls.map(l => [l.id, netUnit(l, o)])), byId = new Map(ls.map(l => [l.id, l]));
   let feeBooked = false;
   for (const d of Repo.by('deliveries', 'orderId', o.id)) {
-    if (d.pickedUpAt && d.cost) push('delivery', d.pickedUpAt, d.cost, `Delivery cost ${d.id}`);
-    if (d.returnedAt && d.returnCost && d.shippingPaidBy !== 'waived') push('delivery', d.returnedAt, d.returnCost, `Return-to-warehouse cost ${d.id}`);
-    if (d.returnedAt && d.shippingPaidBy === 'waived' && d.pickedUpAt && d.cost) push('delivery', d.returnedAt, -d.cost, `Carrier waived the delivery cost on returned ${d.id}`);
+    /* tag 'return': the trip of a parcel that came back with nothing delivered is a cost of the return. */
+    const wasted = d.returnedAt && !d.items.some(i => i.delivered > 0) ? 'return' : undefined;
+    if (d.pickedUpAt && d.cost) push('delivery', d.pickedUpAt, d.cost, `Delivery cost ${d.id}`, wasted);
+    if (d.returnedAt && d.returnCost && d.shippingPaidBy !== 'waived') push('delivery', d.returnedAt, d.returnCost, `Return-to-warehouse cost ${d.id}`, 'return');
+    if (d.returnedAt && d.shippingPaidBy === 'waived' && d.pickedUpAt && d.cost) push('delivery', d.returnedAt, -d.cost, `Carrier waived the delivery cost on returned ${d.id}`, 'return');
     if (d.returnedAt && d.feeCharged) push('revenue', d.returnedAt, d.feeCharged, `Shipping fee charged to the customer on returned ${d.id}`, 'fee');
     if (d.completedAt) {
       for (const it of d.items) if (it.delivered) {
@@ -140,7 +142,7 @@ function orderEntries(o) {
       push('revenue', c.acceptedAt, -it.qty * units.get(l.id), `Return ${c.id}: ${it.qty} × ${l.sku}`);
       push('cogs', c.acceptedAt, -it.qty * l.unitCost, `Return ${c.id}: COGS reversed, item resellable`);
     }
-    if (c.returnCost) push('delivery', c.acceptedAt, c.returnCost, `Return logistics ${c.id}`);
+    if (c.returnCost) push('delivery', c.acceptedAt, c.returnCost, `Return logistics ${c.id}`, 'return');
   }
   for (const p of Repo.by('payments', 'orderId', o.id)) {
     if (p.method === 'Exchange credit') continue;
@@ -336,6 +338,32 @@ const isOverdue = d => {
   return hrs > (Number(S().overdueHours) || 24);
 };
 const overdueWhy = d => d.status === 'Retry Scheduled' ? `Retry was scheduled for ${dateKey(d.retryAt)} and has not started` : `No update for over ${S().overdueHours} hours`;
+
+/* ---------- Returned parcels: why it came back and who pays the shipping ----------
+     business  the business carries the delivery and return cost (default)
+     waived    the carrier charged nothing, so no shipping cost is booked
+     customer  the customer pays a shipping fee, booked as revenue; paidTo says
+               whether they already paid it to the carrier, to the business, or not yet
+   Part-delivered parcel: the customer already paid the delivery fee with the items they kept,
+   so the shipping counts as theirs and nothing else is asked or charged. */
+function returnOutcome(d, o, outcome) {
+  const reason = String(outcome.reason || '').trim();
+  if (reason && !RETURN_REASONS.includes(reason)) fail('Choose a return reason from the list.');
+  if (d.items.some(i => i.delivered > 0)) return { reason, paidBy: 'customer', fee: 0, paidTo: 'unpaid' };
+  const paidBy = outcome.shipping || 'business';
+  if (!['business', 'waived', 'customer'].includes(paidBy)) fail('Choose who pays the shipping.');
+  let fee = 0, paidTo = 'unpaid';
+  if (paidBy === 'customer') {
+    fee = round2(outcome.fee ?? (o.deliveryFee || d.cost || 0)); if (!(fee > 0)) fail('Enter the shipping fee the customer pays.');
+    paidTo = outcome.paidTo || 'unpaid'; if (!['unpaid', 'carrier', 'business'].includes(paidTo)) fail('Choose whether the customer has paid the fee.');
+  }
+  return { reason, paidBy, fee, paidTo };
+}
+function payReturnFee(d, x, method) {
+  if (x.paidTo === 'unpaid' || !x.fee || Repo.count('payments', 'ref', `FEE-${d.id}`)) return;
+  const toCarrier = x.paidTo === 'carrier';
+  Repo.insert('payments', { id: 'PAY-' + Repo.nextId('PAY', 5001), orderId: d.orderId, deliveryId: toCarrier ? d.id : null, kind: 'collection', method: toCarrier ? 'Cash' : (PAYMENT_METHODS.includes(method) ? method : 'Cash'), amount: x.fee, holderKey: toCarrier ? d.carrierKey : 'business', driverId: toCarrier && d.mode === 'driver' ? d.carrierId : null, ref: `FEE-${d.id}`, at: Clock.now(), by: activityBy(), fee: 0, note: 'Shipping fee on a returned parcel', reason: '' });
+}
 
 /* ---------- Guards: each returns null if allowed, or the reason it is not ---------- */
 const Guards = {
@@ -664,49 +692,40 @@ const Commands = {
       return Commands.deliver(deliveryId, payload);
     });
   },
-  /* One step from "with the carrier" to back in the warehouse, recording why it came back. */
+  /* One step from "with the carrier" to "on its way back", recording why it came back and who pays the shipping.
+     Stock only goes up when the parcel is physically received (receiveAtWarehouse). */
   quickReturn(deliveryId, outcome = {}) {
     return Repo.tx(() => {
       const d = Repo.get('deliveries', deliveryId); if (!d) fail('Unknown delivery.');
       if (!RETURN_REASONS.includes(outcome.reason)) fail('Choose why it came back.');
+      if (d.status === 'Return in Transit') fail(`${d.id} is already on its way back. Receive it at the warehouse.`);
+      const x = returnOutcome(d, orderOf(d.orderId), outcome);
       if (d.status === 'Out for Delivery') Commands.setDeliveryStatus(d.id, 'Failed Attempt', { reason: 'Other', note: outcome.reason });
-      if (d.status !== 'Return in Transit') Commands.startReturn(d.id, outcome.reason);
-      return Commands.receiveAtWarehouse(d.id, outcome.note, outcome);
+      Commands.startReturn(d.id, [outcome.reason, outcome.note].filter(Boolean).join(' · '));
+      Repo.update('deliveries', d, { returnReason: x.reason || null, shippingPaidBy: x.paidBy, feeCharged: x.fee });
+      payReturnFee(d, x, outcome.method);
+      return d;
     });
   },
   startReturn(deliveryId, note) { return Commands.setDeliveryStatus(deliveryId, 'Return in Transit', { note: note || 'Heading back to the warehouse' }); },
-  /* Physical handover at the warehouse: undelivered units return to stock, once. */
   /* Physical handover at the warehouse: undelivered units return to stock, once.
-     outcome records why it came back and who pays the shipping:
-       business  the business carries the delivery and return cost (default)
-       waived    the carrier charged nothing, so no shipping cost is booked
-       customer  the customer pays a shipping fee, booked as revenue; paidTo says
-                 whether they already paid it to the carrier, to the business, or not yet */
+     outcome (see returnOutcome) is only needed when the parcel was not marked Returned first. */
   receiveAtWarehouse(deliveryId, note, outcome = {}) {
     return Repo.tx(() => {
       const d = Repo.get('deliveries', deliveryId), why = Guards.flow(d, 'Returned to Warehouse'); if (why) fail(why);
       const o = orderOf(d.orderId), at = Clock.now(); let n = 0;
-      const paidBy = outcome?.shipping || 'business', reason = String(outcome?.reason || '').trim();
-      if (!['business', 'waived', 'customer'].includes(paidBy)) fail('Choose who pays the shipping.');
-      if (reason && !RETURN_REASONS.includes(reason)) fail('Choose a return reason from the list.');
-      if (paidBy === 'waived' && d.items.some(i => i.delivered > 0)) fail('Part of this parcel was delivered, so the carrier still charges for the trip. Choose "The business" instead.');
-      let fee = 0, paidTo = 'unpaid';
-      if (paidBy === 'customer') {
-        fee = round2(outcome.fee ?? (o.deliveryFee || d.cost || 0)); if (!(fee > 0)) fail('Enter the shipping fee the customer pays.');
-        paidTo = outcome.paidTo || 'unpaid'; if (!['unpaid', 'carrier', 'business'].includes(paidTo)) fail('Choose whether the customer has paid the fee.');
-      }
+      /* Marked Returned earlier: the outcome was recorded then, and any fee paid then is already a payment. */
+      const x = d.shippingPaidBy && !outcome?.shipping ? { reason: d.returnReason || '', paidBy: d.shippingPaidBy, fee: d.feeCharged || 0, paidTo: 'unpaid' } : returnOutcome(d, o, outcome || {});
+      const { reason, paidBy, fee, paidTo } = x;
       for (const it of d.items) {
         const back = it.qty - it.delivered; if (back <= 0) continue;
         const again = d.history.some(h => h.note === 'Return undone');
         postMovement({ item: it.sku, itemType: 'sku', qty: back, kind: 'Inspected return', key: `undelivered:${d.id}:${it.lineId}${again ? `:${d.history.length}` : ''}`, ref: `#${o.id} · ${d.id}`, note: 'Undelivered parcel inspected and restocked' });
         const l = Repo.get('lines', it.lineId); Repo.update('lines', l, { undeliveredBack: l.undeliveredBack + back }); n += back;
       }
-      const who = { business: 'business pays the shipping', waived: 'no shipping cost (carrier waived it)', customer: `customer pays a ${money(fee)} shipping fee${paidTo === 'unpaid' ? ', not paid yet' : paidTo === 'carrier' ? `, paid to ${carrierName(d)}` : ', paid to the business'}` }[paidBy];
+      const who = paidBy === 'customer' && !fee ? 'the customer already paid the shipping with the items they kept' : { business: 'business pays the shipping', waived: 'no shipping cost (carrier waived it)', customer: `customer pays a ${money(fee)} shipping fee${paidTo === 'unpaid' ? '' : paidTo === 'carrier' ? `, paid to ${carrierName(d)}` : ', paid to the business'}` }[paidBy];
       Repo.update('deliveries', d, { status: 'Returned to Warehouse', custody: 'warehouse', returnedAt: at, updatedAt: at, returnReason: reason || null, shippingPaidBy: paidBy, feeCharged: fee, history: [...d.history, { at, status: 'Returned to Warehouse', by: activityBy(), note: `${note || `${n} unit(s) received and inspected`}${reason ? ` · ${reason}` : ''} · ${who}` }] });
-      if (paidTo !== 'unpaid') {
-        const toCarrier = paidTo === 'carrier';
-        Repo.insert('payments', { id: 'PAY-' + Repo.nextId('PAY', 5001), orderId: o.id, deliveryId: toCarrier ? d.id : null, kind: 'collection', method: toCarrier ? 'Cash' : (PAYMENT_METHODS.includes(outcome.method) ? outcome.method : 'Cash'), amount: fee, holderKey: toCarrier ? d.carrierKey : 'business', driverId: toCarrier && d.mode === 'driver' ? d.carrierId : null, ref: `FEE-${d.id}`, at, by: activityBy(), fee: 0, note: 'Shipping fee on a returned parcel', reason: '' });
-      }
+      payReturnFee(d, x, outcome?.method);
       if (!linesOf(o).some(l => l.delivered > 0)) Repo.update('orders', o, { status: 'Returned', returnedAt: at });
       log(`${d.id}: ${n} unit(s) received at warehouse from ${carrierName(d)}${reason ? ` (${reason})` : ''} · ${who}`, { orderId: o.id, deliveryId: d.id, driverId: d.mode === 'driver' ? d.carrierId : undefined });
     });

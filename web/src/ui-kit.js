@@ -52,7 +52,7 @@ const ui = {
   ov: { preset: '30', from: '', to: '', campaign: '', sku: '', courier: '', driver: '' },
   orders: blankOrderFilters(), crm: { q: '', seg: '' }, products: { q: '' }, staff: { tab: 'Today', date: '', month: '', q: '' }, perf: { preset: '30', from: '', to: '' }, inv: { tab: 'Finished goods', q: '', kind: '' },
   ship: { tab: 'Dispatch queue', q: '', avail: '', courier: '', carrier: '', gov: '' }, board: { gov: '', area: '' }, drv: { tab: 'Current assignments', from: '', to: '', status: '', collection: '', area: '' },
-  fin: { tab: 'Profit & loss', preset: 'all', from: '', to: '', courier: '', outcome: '', driver: '', method: '', receipt: '' }, camp: { focus: '' }, set: { tab: 'Workspace', activity: '' }, team: null,
+  fin: { tab: 'Profit & loss', preset: 'all', from: '', to: '', courier: '', outcome: '', driver: '', method: '', receipt: '', coa: 'tree', acct: '1100' }, camp: { focus: '' }, set: { tab: 'Workspace', activity: '' }, team: null,
 };
 /* "Cairo – New Cairo": governorate and area as separate text, so each is translated. */
 const areaLabel = area => { const g = govOf(area); return g ? `<span>${esc(g)}</span> – <span>${esc(area)}</span>` : esc(area || ''); };

@@ -9,7 +9,7 @@ import { order360, ordersView, overview } from './views-core.js';
 import { crmView, driverProfile, inventoryView, shippingView } from './views-ops.js';
 import { campaignsView, financeView, roadmapView, settingsView } from './views-biz.js';
 import { performanceView, productsView, staffView } from './views-more.js';
-import { A, closeModal, customerOptionsFor, field, globalSearch, handleCsv, modalLive, orderDraft, renderDraftLines, run, syncAssign, toast } from './actions.js';
+import { A, closeModal, customerOptionsFor, field, globalSearch, handleCsv, modalLive, orderDraft, renderDraftLines, run, toast } from './actions.js';
 /* ==========================================================================
    LAYER 7 · APP SHELL: router, render loop, delegated events and startup.
    ========================================================================== */
@@ -89,7 +89,6 @@ function bindEvents() {
     if (t.dataset.avail) return run(() => Commands.setAvailability(t.dataset.avail, t.value), 'Availability updated.');
     if (t.dataset.source) return run(() => Commands.saveSettings({ sources: { ...S().sources, [t.dataset.source]: t.value } }), t.value === 'API (planned)' ? 'Preference saved. No API is connected.' : 'Preference saved.');
     if (t.dataset.roadmap) return run(() => Commands.setRoadmap(t.dataset.roadmap, t.checked));
-    if (t.dataset.assignMode) { syncAssign(); if (modalLive) modalLive(e); return; }
     if (t.dataset.gov) { const s = t.form?.elements[t.dataset.gov]; if (s) s.innerHTML = (GOVERNORATES[t.value] || []).map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join(''); return; }
     if (t.dataset.dl) { orderDraft[Number(t.dataset.i)][t.dataset.dl] = t.value; return renderDraftLines(); }
     if (t.id === 'csvFile') return handleCsv(t.files[0]);
