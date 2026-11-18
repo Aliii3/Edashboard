@@ -203,7 +203,7 @@ function settlementStatus(o) {
   const held = ds.filter(d => d.mode === 'driver');
   let driverHeld = 0, driverGot = 0;
   for (const p of paymentsOf(o)) if (p.holderKey.startsWith('driver:')) { driverGot += p.amount; }
-  driverHeld = driverGot - sum(Repo.by('handoverAllocs', 'orderId', o.id), a => a.amount);
+  driverHeld = driverGot - sum(Repo.by('handoverAllocs', 'orderId', o.id), a => a.amount) - sum(held, d => deliveryCash(d).kept);
   const cs = ds.filter(d => d.mode === 'courier' && d.pickedUpAt);
   if (cs.length) {
     const b = cs.reduce((acc, d) => { const x = courierDeliveryBalance(d); acc.exp += x.expectedNet; acc.got += x.actual; acc.any += x.customer; return acc; }, { exp: 0, got: 0, any: 0 });
@@ -258,8 +258,11 @@ function deliveryCash(d) {
   const cash = sum(ps.filter(p => p.kind === 'collection' && p.method === 'Cash' && p.holderKey === carrierKey(d.mode, d.carrierId)), p => p.amount);
   const refunds = sum(ps.filter(p => p.kind === 'refund' && p.holderKey === carrierKey(d.mode, d.carrierId)), p => -p.amount);
   const handed = sum(Repo.by('handoverAllocs', 'deliveryId', d.id), a => a.amount);
-  const kept = sum(Repo.by('driverExpenses', 'deliveryId', d.id).filter(e => e.category === 'Delivery fee payout' && e.paidFromCash && e.status !== 'Rejected'), e => e.amount);
-  return { collected, cash, refunds, handed, kept, unhanded: round2(cash - refunds - handed - kept), method: ps.find(p => p.kind === 'collection')?.method || '' };
+  const exps = Repo.by('driverExpenses', 'deliveryId', d.id).filter(e => e.paidFromCash);
+  const commission = sum(exps.filter(e => e.category === 'Delivery fee payout' && e.status !== 'Rejected'), e => e.amount);
+  /* kept: what the driver kept out of this order's cash: their commission, plus approved spending (fuel…) taken from it at a handover. */
+  const kept = round2(commission + sum(exps.filter(e => e.category !== 'Delivery fee payout' && e.status === 'Approved'), e => e.amount));
+  return { collected, cash, refunds, handed, commission, kept, unhanded: round2(cash - refunds - handed - kept), method: ps.find(p => p.kind === 'collection')?.method || '' };
 }
 /* What the customer is expected to pay on this delivery, given what they have already paid. */
 function expectedFromCustomer(d) {
@@ -338,6 +341,9 @@ const isOverdue = d => {
   return hrs > (Number(S().overdueHours) || 24);
 };
 const overdueWhy = d => d.status === 'Retry Scheduled' ? `Retry was scheduled for ${dateKey(d.retryAt)} and has not started` : `No update for over ${S().overdueHours} hours`;
+
+/* Approved expenses a driver paid from collected cash that no order has absorbed yet. */
+const unlinkedCashSpend = id => Repo.by('driverExpenses', 'driverId', id).filter(e => e.paidFromCash && e.status === 'Approved' && !e.deliveryId);
 
 /* ---------- Returned parcels: why it came back and who pays the shipping ----------
      business  the business carries the delivery and return cost (default)
@@ -747,14 +753,23 @@ const Commands = {
         if (c > left + 0.001) fail(`${d.id}: commission ${money(c)} is more than the ${money(left)} cash on this order.`);
         if (c > 0) {
           kept += c;
-          if (deliveryCash(d).kept > 0) fail(`${d.id}: the driver already kept a commission on this order.`);
+          if (deliveryCash(d).commission > 0) fail(`${d.id}: the driver already kept a commission on this order.`);
           setCarrierCharge(d, c);
           Commands.decideDriverExpense(Commands.addDriverExpense({ driverId, deliveryId: d.id, category: 'Delivery fee payout', amount: c, paidFromCash: true, note: `Commission on #${d.orderId}` }), 'Approved');
         }
         return { deliveryId: d.id, amount: round2(left - c) };
       });
-      /* The commissions used up all the cash: nothing is handed over. */
-      if (kept > 0 && !allocations.some(a => Number(a.amount) > 0)) return null;
+      /* Cash the driver spent on approved expenses (fuel, parking…) belongs to no order. It comes out of the orders
+         settled now, so each order's cash and the driver's total stay equal. */
+      let spent = 0;
+      allocations = allocations.map(a => ({ ...a }));
+      for (const e of unlinkedCashSpend(driverId)) {
+        const a = allocations.find(x => round2(Number(x.amount)) >= e.amount - 0.001); if (!a) continue;
+        a.amount = round2(Number(a.amount) - e.amount); spent += e.amount;
+        Repo.update('driverExpenses', e, { deliveryId: a.deliveryId });
+      }
+      /* The commissions and expenses used up all the cash: nothing is handed over. */
+      if ((kept > 0 || spent > 0) && !allocations.some(a => Number(a.amount) > 0)) return null;
       const dr = Repo.get('drivers', driverId); if (!dr) fail('Unknown driver.');
       ref = (ref || '').trim();   // optional: without one, the handover's own ID is its reference
       if (ref && Repo.count('handovers', 'ref', ref)) fail(`Handover reference ${ref} already exists.`);
@@ -1389,4 +1404,4 @@ function integrity() {
   return out;
 }
 
-export { LEAVE_TYPES, leaveBalance, leaveDays, plannedStatus, carrierCharge, GOVERNORATES, SEED_AREAS, govOf, ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };
+export { unlinkedCashSpend, LEAVE_TYPES, leaveBalance, leaveDays, plannedStatus, carrierCharge, GOVERNORATES, SEED_AREAS, govOf, ATTENDANCE_STATUSES, HHMM, WALK_IN, lateMinutes, productStats, walkInCustomer, RETURN_REASONS, assertOpen, closingCheck, lockedThrough, ACTIVE_CUSTODY, AREAS, CHANNELS, COLLECTION_OUTCOMES, Commands, DEFAULT_SETTINGS, DELIVERY_FLOW, DELIVERY_STATUSES, DRIVER_EXPENSE_CATS, ENTRY_METHODS, EXPENSE_CATS, FAILURE_REASONS, Guards, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES, S, TERMINAL_DELIVERY, _calc, _dk, _fresh, _ledger, _nf, activeDelivery, activityBy, allocationOf, availableOf, bomCost, calc, campaignSpend, carrierKey, carrierName, casesOf, collectionOutcome, contributionOf, courierDeliveryBalance, courierOutcome, courierSummary, customerOf, dateKey, deliveriesOf, deliveryCash, driverCash, driverStats, expectedFromCustomer, integrity, isOverdue, ledger, linesOf, log, marketingAlloc, money, netUnit, orderEntries, orderMerch, orderOf, orderValue, overdueWhy, paymentStatus, paymentsOf, postMovement, reservedOf, settlementStatus, stockOnHand, tol, totals };

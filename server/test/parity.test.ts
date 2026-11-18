@@ -74,6 +74,8 @@ function nextOp(r: () => number, step: number): [string, any[]] {
     () => r() < .3 && ['reopenPeriod', [null, r() < .8 ? 'Correction' : '']],
     () => ['addExpense', [{ name: 'Parity ' + step, category: 'Rent', amount: 30, at: new Date(Date.parse(Clock.now()) - Math.floor(r() * 8) * 864e5).toISOString() }]],
     () => { const e = any(Repo.all('expenses')); return e && ['removeExpense', [e.id]]; },
+    () => ['addJournalEntry', [{ debit: r() < .7 ? '1100' : '3200', credit: r() < .7 ? '3100' : '1100', amount: 500, note: 'Partner ' + step, at: new Date(Date.parse(Clock.now()) - Math.floor(r() * 8) * 864e5).toISOString() }]],
+    () => { const j = any(Repo.all('journalEntries')); return j && ['removeJournalEntry', [j.id]]; },
   ];
   for (let i = 0; i < 30; i++) { const op = pick(r, choices)(); if (op) return op; }
   return ['addSpend', [{ campaignId: Repo.all('campaigns')[0].id, amount: 10 }]];

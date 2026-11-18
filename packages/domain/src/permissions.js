@@ -11,7 +11,7 @@ export const COMMAND_ROLES = {
   openCase: [OPS], acceptReturn: [OPS, WH], rejectCase: [OPS, WH], createReplacement: [OPS], closeCase: [OPS, FIN],
   adjustStock: [OPS, WH], createProduction: [OPS, WH], startProduction: [OPS, WH], completeProduction: [OPS, WH], cancelProduction: [OPS, WH], saveSku: [OPS], saveMaterial: [OPS], receiveMaterial: [OPS, WH],
   saveCustomer: [OPS], setCustomerTags: [OPS], logContact: [OPS, FIN],
-  saveCampaign: [FIN], addSpend: [FIN], addExpense: [FIN], removeExpense: [FIN],
+  saveCampaign: [FIN], addSpend: [FIN], addExpense: [FIN], removeExpense: [FIN], addJournalEntry: [FIN], removeJournalEntry: [FIN],
   saveDriver: [OPS], setAvailability: [OPS], saveCourier: [], saveSettings: [], setRoadmap: [],
   closePeriod: [FIN], reopenPeriod: [],
   saveEmployee: [OPS], requestLeave: [OPS, EMP], decideLeave: [OPS], recordAttendance: [OPS], recordAttendanceDay: [OPS], removeAttendance: [OPS],
@@ -38,7 +38,7 @@ export const ROLE_SCREENS = {
 export const COST_ROLES = ['owner', 'finance'];
 export const seesCosts = role => COST_ROLES.includes(role);
 const COST_FIELDS = { lines: ['unitCost'], materials: ['cost'], boms: ['labor', 'overhead', 'buyCost'], production: ['unitCost'], campaigns: ['budget', 'reportedRoas'] };
-const HIDDEN_TABLES = { operations: ['spend', 'expenses'], warehouse: ['spend', 'expenses', 'contacts', 'employees', 'attendance', 'leaveRequests'], driver: ['spend', 'expenses', 'contacts', 'settlements', 'settlementAllocs', 'campaigns', 'materials', 'boms', 'production', 'movements', 'couriers', 'employees', 'attendance', 'leaveRequests'] };
+const HIDDEN_TABLES = { operations: ['spend', 'expenses', 'journalEntries'], warehouse: ['spend', 'expenses', 'journalEntries', 'contacts', 'employees', 'attendance', 'leaveRequests'], driver: ['spend', 'expenses', 'journalEntries', 'contacts', 'settlements', 'settlementAllocs', 'campaigns', 'materials', 'boms', 'production', 'movements', 'couriers', 'employees', 'attendance', 'leaveRequests'] };
 export const canReadTable = (role, table) => !(HIDDEN_TABLES[role] || []).includes(table);
 /* Returns the row as this role may see it, or null when the role may not see it at all. */
 export function redactRow(role, table, row) {

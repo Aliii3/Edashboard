@@ -1,5 +1,5 @@
-import { Repo, round2 } from './core.js';
-import { EXPENSE_CATS, calc, carrierCharge, dateKey } from './domain.js';
+import { Clock, Repo, fail, round2 } from './core.js';
+import { Commands, EXPENSE_CATS, activityBy, assertOpen, calc, carrierCharge, dateKey, log, money } from './domain.js';
 /* ==========================================================================
    CHART OF ACCOUNTS: a double-entry journal built from the records the app
    already keeps (orders, payments, handovers, settlements, spend, expenses).
@@ -15,6 +15,9 @@ const ACCOUNTS = [
   ['1400', 'Inventory', '1000'],
   ['2000', 'Liabilities', null],
   ['2100', 'Owed to couriers for shipping', '2000'],
+  ['3000', 'Equity', null],
+  ['3100', "Partners' capital", '3000'],
+  ['3200', 'Partner withdrawals', '3000'],
   ['4000', 'Revenue', null],
   ['4100', 'Product sales', '4000'],
   ['4200', 'Shipping fees charged to customers', '4000'],
@@ -28,9 +31,12 @@ const ACCOUNTS = [
   ['6500', 'Operating expenses', '6000'],
   ...EXPENSE_CATS.map(c => [OPEX_CODES[c], c, '6500']),
   ['6600', 'Courier expenses', '6000'],
-].map(([code, name, parent]) => ({ code, name, parent, type: { 1: 'Asset', 2: 'Liability', 4: 'Revenue', 5: 'Expense', 6: 'Expense' }[code[0]] }));
+].map(([code, name, parent]) => ({ code, name, parent, type: { 1: 'Asset', 2: 'Liability', 3: 'Equity', 4: 'Revenue', 5: 'Expense', 6: 'Expense' }[code[0]] }));
 const ACCOUNT = new Map(ACCOUNTS.map(a => [a.code, a]));
 const isLeaf = code => !ACCOUNTS.some(a => a.parent === code);
+/* Manual entries only move balance-sheet accounts, so Profit & loss and the income statement stay equal.
+   Income and costs go through orders, spend and the expense register. */
+const MANUAL_ACCOUNTS = ACCOUNTS.filter(a => isLeaf(a.code) && ['Asset', 'Liability', 'Equity'].includes(a.type));
 
 /* Journal lines: { code, amt (debit +, credit -), at, d, why, orderId, ref }. Every posting is balanced. */
 const _journal = { v: -1, rows: [] };
@@ -63,6 +69,7 @@ function journal() {
   }
   for (const s of Repo.all('spend')) post(s.at, '6400', '1100', s.amount, s.note || 'Campaign spend', { ref: s.campaignId });
   for (const e of Repo.all('expenses')) post(e.at, OPEX_CODES[e.category] || OPEX_CODES.Other, '1100', e.amount, e.name, { ref: e.id });
+  for (const j of Repo.all('journalEntries')) post(j.at, j.debit, j.credit, j.amount, j.note, { ref: j.id, manual: true });
   return _journal.rows = rows;
 }
 const inRange = (e, r = {}) => (!r.from || e.d >= r.from) && (!r.to || e.d <= r.to);
@@ -96,4 +103,29 @@ function accountLedger(code, r = {}) {
   return { opening: round2(opening), rows: out, closing: round2(run) };
 }
 
-export { ACCOUNTS, ACCOUNT, OPEX_CODES, accountBalances, accountLedger, incomeStatement, isLeaf, journal, trialBalance };
+/* Manual entries: one debit, one credit, same amount. Example: a partner puts cash in, Dr 1100 / Cr 3100. */
+Object.assign(Commands, {
+  addJournalEntry({ at, debit, credit, amount, note }) {
+    return Repo.tx(() => {
+      const ok = c => MANUAL_ACCOUNTS.some(a => a.code === c);
+      if (!ok(debit) || !ok(credit)) fail('Choose a cash, balance or capital account for both sides.');
+      if (debit === credit) fail('The debit and credit accounts must be different.');
+      amount = round2(amount); if (!(amount > 0)) fail('Amount must be positive.');
+      if (!note?.trim()) fail('Enter a description.');
+      at = at || Clock.now(); assertOpen(at, 'This entry');
+      const id = 'JE-' + Repo.nextId('JE', 1);
+      Repo.insert('journalEntries', { id, at, debit, credit, amount, note: note.trim().slice(0, 200), by: activityBy() });
+      log(`Manual entry ${id}: Dr ${debit} / Cr ${credit} ${money(amount)} · ${note.trim()}`, { audience: 'finance' });
+      return id;
+    });
+  },
+  removeJournalEntry(id) {
+    return Repo.tx(() => {
+      const j = Repo.get('journalEntries', id); if (!j) fail('That entry no longer exists.');
+      assertOpen(j.at, 'This entry'); Repo.remove('journalEntries', j);
+      log(`Manual entry ${j.id} removed: ${money(j.amount)} · ${j.note}`, { audience: 'finance' });
+    });
+  },
+});
+
+export { MANUAL_ACCOUNTS, ACCOUNTS, ACCOUNT, OPEX_CODES, accountBalances, accountLedger, incomeStatement, isLeaf, journal, trialBalance };

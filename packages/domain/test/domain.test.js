@@ -89,7 +89,8 @@ let o4=mk([{sku:'TEE-IVR',qty:1}]);prep(o4);let d5=Commands.assign(o4.id,'driver
 let dc=driverCash('DRV-1').outstanding;let pb=totals().profit;let ex=Commands.addDriverExpense({driverId:'DRV-1',category:'Delivery fee payout',amount:45,paidFromCash:true});Commands.decideDriverExpense(ex,'Approved');
 ok('payout lowers cash',driverCash('DRV-1').outstanding===round2(dc-45));ok('payout no double P&L',totals().profit===pb);
 let ex2=Commands.addDriverExpense({driverId:'DRV-1',category:'Fuel',amount:30,paidFromCash:false});Commands.decideDriverExpense(ex2,'Approved');ok('noncash exp no custody change',driverCash('DRV-1').outstanding===round2(dc-45));ok('fuel hits P&L',round2(pb-totals().profit)===30);
-throws('handover over expense',()=>{const left=deliveryCash(d5).unhanded;const tot=driverCash('DRV-1').outstanding;Commands.recordHandover({driverId:'DRV-1',ref:'TX9',receivedBy:'x',allocations:Repo.by('deliveries','carrierKey','driver:DRV-1').map(q=>({deliveryId:q.id,amount:deliveryCash(q).unhanded})).filter(a=>a.amount>0)})},/exceeds/);
+// cash the driver spent (a payout tied to no order) comes out of the orders handed over, so receiving them all in full works and leaves nothing; rolled back afterwards
+throws('handover absorbs cash spent',()=>Repo.tx(()=>{Commands.recordHandover({driverId:'DRV-1',ref:'TX9',receivedBy:'x',allocations:Repo.by('deliveries','carrierKey','driver:DRV-1').map(q=>({deliveryId:q.id,amount:deliveryCash(q).unhanded})).filter(a=>a.amount>0)});throw new Rule(Math.abs(driverCash('DRV-1').outstanding)<0.01?'rollback ok':'left '+driverCash('DRV-1').outstanding)}),/rollback ok/);
 // courier: net settlement not double
 let o5=mk([{sku:'TEE-IVR',qty:1}]);prep(o5);let d6=Commands.assign(o5.id,'courier','BOSTA');Commands.pickup(d6.id);Commands.setDeliveryStatus(d6.id,'Out for Delivery');Commands.deliver(d6.id,{collection:{amount:490,method:'Cash'}});
 let b6=courierDeliveryBalance(d6);ok('courier exp net',b6.expectedNet===490-65-15,b6.expectedNet);
@@ -244,6 +245,15 @@ test('board shipping: one-step delivered and returned, per-order commission kept
   assert.equal(feeRev, 50); assert.equal(calc(orderOf(p.id)).entries.filter(e => e.tag === 'fee').reduce((s, e) => s + e.amt, 0), 50, 'the delivery fee stays counted');
   const tb = trialBalance();
   assert.equal(tb.debit, tb.credit, 'trial balance balances'); assert.equal(incomeStatement().profit, totals().profit, 'accounts agree with P&L');
+  /* A partner puts 10,000 into the company cash: cash and capital move, profit does not. */
+  const { accountBalances } = await import('../src/index.js'), bank = accountBalances().get('1100'), prof = totals().profit;
+  const je = Commands.addJournalEntry({ debit: '1100', credit: '3100', amount: 10000, note: 'Partner A deposit' });
+  assert.equal(accountBalances().get('1100'), round2(bank + 10000)); assert.equal(accountBalances().get('3100'), -10000);
+  assert.equal(totals().profit, prof); assert.equal(trialBalance().debit, trialBalance().credit);
+  throws(() => Commands.addJournalEntry({ debit: '6510', credit: '1100', amount: 5, note: 'x' }), /cash, balance or capital/);
+  throws(() => Commands.addJournalEntry({ debit: '1100', credit: '1100', amount: 5, note: 'x' }), /cash, balance or capital|different/);
+  throws(() => Commands.addJournalEntry({ debit: '1100', credit: '3100', amount: 0, note: 'x' }), /positive/);
+  Commands.removeJournalEntry(je); assert.equal(accountBalances().get('1100'), bank);
   /* Cash handover for one ticked order with its own commission: the driver keeps it, hands over the rest,
      and the trip's shipping cost becomes that commission. */
   const cash = driverCash(drv).outstanding, profit = totals().profit, before = carrierCharge(Repo.get('deliveries', da.id));
@@ -320,5 +330,27 @@ test('a phone number can belong to two customers, and collection references are 
   const d = Repo.all('deliveries').find(x => x.mode === 'driver' && deliveryCash(x).unhanded > 0);
   const id = Commands.recordHandover({ driverId: d.carrierId, receivedBy: 'T', allocations: [{ deliveryId: d.id, commission: 0 }] });
   assert.equal(Repo.get('handovers', id).ref, id, 'no reference given: the handover ID is used');
+  assert.deepEqual(integrity().filter(x => !x.ok), []);
+});
+
+test('receiving a driver\'s cash after they paid an approved expense from it', async () => {
+  const { orderOf, settlementStatus, unlinkedCashSpend } = await import('../src/index.js');
+  buildSeedWorkspace();
+  const cust = Repo.all('customers')[0], drv = Repo.all('drivers').find(d => d.active !== false && d.availability === 'Available').id;
+  Commands.adjustStock({ item: 'TEE-IVR', itemType: 'sku', qty: 10, reason: 't' });
+  const o = Commands.createOrder({ customerId: cust.id, lines: [{ sku: 'TEE-IVR', qty: 2 }], channel: 'Phone', paymentMethod: 'COD', deliveryFee: 40 });
+  Commands.confirmOrder(o.id); Commands.advanceOrder(o.id, 'Processing'); Commands.advanceOrder(o.id, 'Ready');
+  const d = Commands.shipOrder(o.id, 'driver', drv, { then: 'out' });
+  Commands.quickDeliver(d.id, { quantities: Object.fromEntries(d.items.map(i => [i.lineId, i.qty])), collection: { amount: round2(calc(orderOf(o.id)).value), method: 'Cash' } });
+  /* The driver paid 60 of fuel out of the cash: their total is 60 lower than their orders add up to. */
+  Commands.decideDriverExpense(Commands.addDriverExpense({ driverId: drv, category: 'Fuel', amount: 60, paidFromCash: true }), 'Approved');
+  const open = Repo.by('deliveries', 'carrierKey', 'driver:' + drv).filter(x => deliveryCash(x).unhanded > 0);
+  assert.equal(round2(open.reduce((s, x) => s + deliveryCash(x).unhanded, 0) - driverCash(drv).outstanding), 60);
+  /* Receiving every order with a 45 commission each used to be refused ("exceeds outstanding cash"). */
+  Commands.recordHandover({ driverId: drv, receivedBy: 'T', allocations: open.map(x => ({ deliveryId: x.id, commission: Math.min(45, deliveryCash(x).unhanded) })) });
+  assert.equal(driverCash(drv).outstanding, 0);
+  assert.equal(unlinkedCashSpend(drv).length, 0, 'the fuel is now tied to an order');
+  assert.ok(Repo.by('deliveries', 'carrierKey', 'driver:' + drv).every(x => Math.abs(deliveryCash(x).unhanded) < 0.01));
+  assert.equal(settlementStatus(orderOf(o.id)), 'Handed over');
   assert.deepEqual(integrity().filter(x => !x.ok), []);
 });

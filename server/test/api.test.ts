@@ -160,6 +160,9 @@ test('staff only receive the figures their role may see', async () => {
   assert.ok((await page('fin', 'spend')).length > 0);
   assert.equal((await page('ops', 'spend')).length, 0);
   assert.equal((await page('wh', 'expenses')).length, 0);
+  assert.equal((await cmd('fin', 'addJournalEntry', { debit: '1100', credit: '3100', amount: 1000, note: 'Partner deposit' })).status, 200);
+  assert.ok((await page('fin', 'journalEntries')).length > 0);
+  assert.equal((await page('ops', 'journalEntries')).length, 0, 'manual entries are finance-only');
   assert.equal((await page('wh', 'contacts')).length, 0);
   assert.ok((await page('ops', 'contacts')).length > 0);
   assert.ok((await page('fin', 'lines')).some((l: any) => l.unitCost > 0));

@@ -4,8 +4,8 @@
 import { TERMINAL } from './terminal.ts';
 import { selectRows, readWorkspace, idParam, loadAll, type Client } from './db.ts';
 
-export type Scope = { all?: boolean; orders: any[]; deliveries: any[]; drivers: any[]; cases: any[]; discrepancies: any[]; driverExpenses: any[]; customers: any[]; phones: any[]; campaignSpend: any[]; expenses: any[]; production: any[]; attendance: any[] };
-const scope = (o: Partial<Scope> = {}): Scope => ({ orders: [], deliveries: [], drivers: [], cases: [], discrepancies: [], driverExpenses: [], customers: [], phones: [], campaignSpend: [], expenses: [], production: [], attendance: [], ...o });
+export type Scope = { all?: boolean; orders: any[]; deliveries: any[]; drivers: any[]; cases: any[]; discrepancies: any[]; driverExpenses: any[]; customers: any[]; phones: any[]; campaignSpend: any[]; expenses: any[]; journalEntries: any[]; production: any[]; attendance: any[] };
+const scope = (o: Partial<Scope> = {}): Scope => ({ orders: [], deliveries: [], drivers: [], cases: [], discrepancies: [], driverExpenses: [], customers: [], phones: [], campaignSpend: [], expenses: [], journalEntries: [], production: [], attendance: [], ...o });
 const attId = (x: any, date?: unknown) => x && typeof x === 'object' ? `ATT-${x.employeeId}-${date ?? x.date}` : null;
 const phone = (p: unknown) => typeof p === 'string' ? p.replace(/[\s-]/g, '') : null;
 const first = (a: any[]) => a[0] && typeof a[0] === 'object' ? a[0] : {};
@@ -32,6 +32,7 @@ export function scopeFor(name: string, a: any[]): Scope {
     case 'logContact': return scope({ customers: [first(a).customerId] });
     case 'addSpend': return scope({ campaignSpend: [first(a).campaignId] });
     case 'removeExpense': return scope({ expenses: [a[0]] });
+    case 'removeJournalEntry': return scope({ journalEntries: [a[0]] });
     case 'saveDriver': return scope({ drivers: first(a).id ? [first(a).id] : [] });
     case 'closePeriod': return scope({ all: true });   // closing figures need the whole ledger
     case 'reopenPeriod': return scope();
@@ -39,7 +40,7 @@ export function scopeFor(name: string, a: any[]): Scope {
     case 'recordAttendanceDay': return scope({ attendance: Array.isArray(a[1]) ? a[1].map((x: any) => attId(x, a[0])) : [] });
     case 'removeAttendance': return scope({ attendance: [a[0]] });
     case 'saveEmployee': case 'requestLeave': case 'decideLeave': return scope();
-    case 'adjustStock': case 'createProduction': case 'receiveMaterial': case 'saveSku': case 'saveMaterial': case 'saveCampaign': case 'addExpense':
+    case 'adjustStock': case 'createProduction': case 'receiveMaterial': case 'saveSku': case 'saveMaterial': case 'saveCampaign': case 'addExpense': case 'addJournalEntry':
     case 'setAvailability': case 'saveCourier': case 'saveSettings': case 'setRoadmap': return scope();
     default: throw new Error(`No data scope defined for ${name}`);
   }
@@ -85,6 +86,7 @@ export async function loadScope(c: Client, s: Scope) {
   const phones = clean(s.phones); if (phones.length) put('customers', await selectRows(c, 'customers', 'phone = ANY($1)', [phones]));
   const camp = clean(s.campaignSpend); if (camp.length) put('spend', await selectRows(c, 'spend', 'campaign_id = ANY($1)', [camp]));
   await byIds('expenses', clean(s.expenses));
+  await byIds('journalEntries', clean(s.journalEntries));
   await byIds('production', clean(s.production));
   await byIds('attendance', clean(s.attendance));
   /* Summary rows: total stock per item, and reservations held by orders not loaded above. */

@@ -36,7 +36,7 @@ const SCHEMA = {
   cases: { idx: ['orderId'] },
   movements: { idx: ['item', 'key'], agg: [['item', 'qty']] },
   production: { idx: ['sku'] },
-  expenses: { idx: [] },
+  expenses: { idx: [] }, journalEntries: { idx: [] },
   events: { idx: ['orderId', 'driverId', 'customerId', 'deliveryId'] },
   employees: { idx: [] }, attendance: { idx: ['employeeId', 'date'] }, leaveRequests: { idx: ['employeeId'] },
 };

@@ -1,8 +1,9 @@
 import { Commands, Session, request, loadSnapshot, pull } from './api.js';
-import { isAr, setLang } from './i18n.js';
+import { isAr, setLang, trText } from './i18n.js';
+import { MANUAL_ACCOUNTS, ACCOUNT, ACCOUNTS, accountBalances, accountLedger, incomeStatement, trialBalance } from '@commerce-os/domain';
 import { ROLES } from '@commerce-os/domain';
 import { Repo, Rule, esc, fail, round2, sum } from '@commerce-os/domain';
-import { leaveBalance, plannedStatus, carrierCharge, ATTENDANCE_STATUSES, lateMinutes, RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
+import { unlinkedCashSpend, leaveBalance, plannedStatus, carrierCharge, ATTENDANCE_STATUSES, lateMinutes, RETURN_REASONS, AREAS, CHANNELS, DRIVER_EXPENSE_CATS, EXPENSE_CATS, FAILURE_REASONS, PAYMENT_METHODS, S, activeDelivery, allocationOf, availableOf, calc, carrierKey, carrierName, contributionOf, courierDeliveryBalance, customerOf, dateKey, deliveryCash, driverCash, driverStats, expectedFromCustomer, isOverdue, linesOf, money, netUnit, orderOf, overdueWhy, paymentStatus, settlementStatus, tol, totals } from '@commerce-os/domain';
 import { act, areaLabel, govAreaF, badge, blankOrderFilters, btn, carrierA, custA, dayShift, fd, fdt, filteredOrders, grid, kpi, latestDelivery, m, note, orderA, orderSearchText, presetRange, rangeLabel, row, search, setPath, simpleTable, timeline, today, ui } from './ui-kit.js';
 import { custodyLabel, returnRate } from './views-core.js';
 import { deliveryActions } from './views-ops.js';
@@ -347,26 +348,27 @@ const A = {
   /* driver money */
   /* Receiving cash from a driver: type the amount counted; it is matched to their oldest deliveries. */
   handoverModal(driverId) {
-    const dr = Repo.get('drivers', driverId), c = driverCash(driverId);
+    const dr = Repo.get('drivers', driverId), c = driverCash(driverId), spent = sum(unlinkedCashSpend(driverId), e => e.amount);
     const rows = Repo.by('deliveries', 'carrierKey', carrierKey('driver', driverId)).map(d => ({ d, cash: deliveryCash(d) })).filter(x => x.cash.unhanded > 0).sort((a, b) => (a.d.completedAt || a.d.assignedAt).localeCompare(b.d.completedAt || b.d.assignedAt));
     if (!rows.length) return toast(`${dr.name} holds no cash to receive.`);
     /* Tick the orders settled today. Each keeps its own commission; what you receive is calculated. */
-    const row = ({ d, cash }) => { const done = cash.kept > 0, def = done ? 0 : Math.min(carrierCharge(d), cash.unhanded); return `<tr><td><input type="checkbox" data-inc="${d.id}" aria-label="Settle order ${d.orderId}"></td><td>#${d.orderId}<br><small>${esc(d.id)} · ${esc(d.status)}</small></td><td>${esc(customerOf(orderOf(d.orderId)).name)}</td><td class="number">${m(cash.unhanded)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" max="${cash.unhanded}" step="0.01" value="${def}" data-com="${d.id}" data-cash="${cash.unhanded}" data-amount="1" ${done ? 'disabled title="Commission already kept on this order"' : ''} aria-label="Commission on order ${d.orderId}"></td><td class="number" data-net="${d.id}"></td></tr>`; };
+    const row = ({ d, cash }) => { const done = cash.commission > 0, def = done ? 0 : Math.min(carrierCharge(d), cash.unhanded); return `<tr><td><input type="checkbox" data-inc="${d.id}" aria-label="Settle order ${d.orderId}"></td><td>#${d.orderId}<br><small>${esc(d.id)} · ${esc(d.status)}</small></td><td>${esc(customerOf(orderOf(d.orderId)).name)}</td><td class="number">${m(cash.unhanded)}</td><td class="number"><input class="qtyinput wide" type="number" min="0" max="${cash.unhanded}" step="0.01" value="${def}" data-com="${d.id}" data-cash="${cash.unhanded}" data-amount="1" ${done ? 'disabled title="Commission already kept on this order"' : ''} aria-label="Commission on order ${d.orderId}"></td><td class="number" data-net="${d.id}"></td></tr>`; };
     modal(`Receive cash · ${esc(dr.name)}`, `<div class="cash-hero"><span><small>Holding now</small><strong>${m(c.outstanding)}</strong></span><small>From ${rows.length} orders</small></div>
       <div class="tablewrap mt"><table><thead><tr><th><input type="checkbox" data-allinc="1" aria-label="Tick every order"></th><th>Order</th><th>Customer</th><th class="number">Cash with driver</th><th class="number">Driver commission</th><th class="number">You receive</th></tr></thead><tbody>${rows.map(row).join('')}</tbody></table></div>
-      <p class="draft-total mt" id="allocTotal"></p>
+      <p class="draft-total mt" id="allocTotal"></p>${spent ? `<p class="inlinehelp">${esc(dr.name)} paid ${m(spent)} of approved expenses (fuel, parking and similar) out of this cash. It is taken from the orders you tick, so you receive that much less.</p>` : ''}
       <div class="formgrid mt">${field('Received by', 'receivedBy', 'text', Session.user.name, 'required maxlength="60"')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${field('Receipt reference (optional)', 'ref', 'text', '', 'maxlength="40" placeholder="Filled in for you if left empty"')}${field('Amount the driver says they handed (optional)', 'declared', 'number', '', 'min="0" step="0.01"')}</div><p class="inlinehelp">The commission is the driver's charge for that order and is booked as shipping cost. If the driver declares more than you receive, a discrepancy is opened for review.</p>`, async f => {
       const picked = [...document.querySelectorAll('#modalForm [data-inc]:checked')].map(el => el.dataset.inc);
       if (!picked.length) fail('Tick the orders the driver is settling.');
       const allocations = picked.map(id => ({ deliveryId: id, commission: Number(document.querySelector(`#modalForm [data-com="${id}"]`).value) || 0 }));
       await Commands.recordHandover({ driverId, ref: f.ref, at: dateToIso(f.date), receivedBy: f.receivedBy, allocations, declared: Number(f.declared) || null });
-      toast(`Cash received from ${dr.name}: ${m(handoverTotals().net)}.`);
+      toast(`Cash received from ${dr.name}: ${m(Math.max(0, handoverTotals().net - spent))}.`);
     }, 'Receive cash', { wide: true });
     modalLive = ev => {
       const fm = document.getElementById('modalForm'); if (!fm) return;
       if (ev?.target?.dataset?.allinc) fm.querySelectorAll('[data-inc]').forEach(x => { x.checked = ev.target.checked; });
       const t = handoverTotals();
-      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Orders ticked</span> <b>${t.n}</b></span><span class="bd"><span>Commission</span> <b>${m(t.com)}</b></span><span class="bd total"><span>Amount you receive</span> <b>${m(t.net)}</b></span>`;
+      const less = t.n ? Math.min(spent, t.net) : 0;
+      document.getElementById('allocTotal').innerHTML = `<span class="bd"><span>Orders ticked</span> <b>${t.n}</b></span><span class="bd"><span>Commission</span> <b>${m(t.com)}</b></span>${spent ? `<span class="bd"><span>Driver expenses paid from this cash</span> <b>${m(less)}</b></span>` : ''}<span class="bd total"><span>Amount you receive</span> <b>${m(t.net - less)}</b></span>`;
     };
     modalLive();
   },
@@ -491,6 +493,16 @@ const A = {
   campaignModal(id) { const c = id ? Repo.get('campaigns', id) : { name: '', platform: 'Meta', start: today(), end: dayShift(today(), 30), budget: 5000, reportedRoas: 0 }; modal(id ? `Edit ${esc(c.name)}` : 'New campaign', `<div class="formgrid">${field('Name', 'name', 'text', c.name, 'required maxlength="80"')}${selectF('Platform', 'platform', ['Meta', 'Instagram', 'TikTok', 'Google', 'WhatsApp', 'Influencer', 'Other'], c.platform)}${field('Meta campaign ID (optional)', 'metaId', 'text', c.metaId || '', 'maxlength="40" placeholder="From Ads Manager, e.g. 120210000000000000"')}${field('Start', 'start', 'date', c.start, 'required')}${field('End', 'end', 'date', c.end, 'required')}${field('Budget', 'budget', 'number', c.budget, 'min="0"')}${field('Reported platform ROAS (typed in, optional)', 'reportedRoas', 'number', c.reportedRoas, 'min="0" step="0.1"')}${selectF('Status', 'state', [['running', 'Running'], ['closed', 'Closed, hidden from order forms']], c.closed ? 'closed' : 'running')}</div><p class="inlinehelp">Record actual spend with Add spend. No ad account is connected. The Meta campaign ID links this campaign to the same campaign in Ads Manager, so spend is entered against the right one.</p>`, async f => { await Commands.saveCampaign({ id, ...f, closed: f.state === 'closed' }); toast('Campaign saved.'); }); },
   spendModal(id) { modal(`Record spend · ${esc(Repo.get('campaigns', id).name)}`, `<div class="formgrid">${field('Amount (negative to correct)', 'amount', 'number', '', 'step="0.01" required')}${field('Date', 'date', 'date', today(), 'required')}<label class="field full">Note<input name="note" maxlength="200"></label></div><p class="inlinehelp">Attributed order contribution recalculates. If no orders are attributed, this still reduces company profit.</p>`, async f => { await Commands.addSpend({ campaignId: id, amount: Number(f.amount), at: dateToIso(f.date), note: f.note }); toast('Spend recorded.'); }, 'Record spend'); },
   expenseModal() { modal('Operating expense', `<div class="formgrid">${field('Description', 'name', 'text', '', 'required maxlength="120"')}${selectF('Category', 'category', EXPENSE_CATS)}${field('Amount', 'amount', 'number', '', 'min="0.01" step="0.01" required')}${field('Date', 'date', 'date', today(), 'required')}</div>`, async f => { await Commands.addExpense({ name: f.name, category: f.category, amount: Number(f.amount), at: dateToIso(f.date) }); toast('Expense recorded.'); }); },
+  /* Manual debit / credit entry. The presets fill both accounts; "Other" lets finance pick them. */
+  journalModal() {
+    const presets = { in: ['1100', '3100'], out: ['3200', '1100'], other: ['', ''] }, opts = [['', 'Choose an account'], ...MANUAL_ACCOUNTS.map(a => [a.code, `${a.code} · ${a.name}`])];
+    modal('Manual journal entry', `${note('A manual entry moves money between cash, balances and partner capital. Income and costs are recorded through orders, campaign spend and the expense register, so they are not chosen here.')}<div class="formgrid">${selectF('What is it?', 'kind', [['in', 'A partner puts money into the company cash'], ['out', 'A partner takes money out of the company cash'], ['other', 'Other (choose the accounts)']])}${field('Partner or description', 'note', 'text', '', 'required maxlength="200"')}${field('Amount', 'amount', 'number', '', 'min="0.01" step="0.01" required')}${field('Date', 'date', 'date', today(), `required max="${today()}"`)}${selectF('Debit (Dr)', 'debit', opts, '1100')}${selectF('Credit (Cr)', 'credit', opts, '3100')}</div><p class="inlinehelp">Debit is where the money goes, credit is where it comes from.</p>`, async f => {
+      if (!f.debit || !f.credit) fail('Choose both accounts.');
+      const id = await Commands.addJournalEntry({ at: dateToIso(f.date), debit: f.debit, credit: f.credit, amount: Number(f.amount), note: f.note }); toast(`${id} recorded.`);
+    }, 'Record entry');
+    modalLive = ev => { const fm = document.getElementById('modalForm'); if (ev?.target?.name !== 'kind') return; const [dr, cr] = presets[fm.elements.kind.value]; fm.elements.debit.value = dr; fm.elements.credit.value = cr; };
+  },
+  removeJournal(id) { const j = Repo.get('journalEntries', id); modal('Remove entry?', `<p>Remove ${esc(j.id)} “${esc(j.note)}” (${m(j.amount)})? The cash and capital balances will change.</p>`, async () => { await Commands.removeJournalEntry(id); toast('Entry removed.'); }, 'Remove', { danger: true }); },
   removeExpense(id) { const e = Repo.get('expenses', id); modal('Remove expense?', `<p>Remove “${esc(e.name)}” (${m(e.amount)})? Operating profit will change.</p>`, async () => { await Commands.removeExpense(id); toast('Expense removed.'); }, 'Remove', { danger: true }); },
   closePeriodModal() {
     const lock = S().lockedThrough, last = dayShift(today().slice(0, 8) + '01', -1);
@@ -501,6 +513,29 @@ const A = {
     const lock = S().lockedThrough;
     modal('Reopen closed days', `${note(`The books are closed through <strong>${esc(lock)}</strong>. Reopening lets figures in those days change again. Use it only to fix a real mistake, then close again.`, 'warning')}<div class="formgrid">${field('Keep closed through (leave empty to reopen everything)', 'through', 'date', '', `max="${dayShift(lock, -1)}"`)}${textF('Reason', 'reason', '', 'required maxlength="300"')}</div>`,
       async f => { await Commands.reopenPeriod(f.through || null, f.reason); toast('Period reopened.'); }, 'Reopen', { danger: true });
+  },
+  /* The Accounts report on screen, as a CSV Excel opens directly (the BOM keeps Arabic readable). */
+  exportAccounts() {
+    const f = ui.fin, r = presetRange(f), view = f.coa || 'tree', nat = (a, v) => ['Liability', 'Equity', 'Revenue'].includes(a.type) ? -v : v;
+    const title = { tree: 'Chart of accounts', income: 'Income statement', trial: 'Trial balance', ledger: 'Account ledger' }[view] || 'Chart of accounts';
+    let rows;
+    if (view === 'income') {
+      const st = incomeStatement(r), line = c => { const a = ACCOUNT.get(c); return [a.code, a.name, nat(a, st.balances.get(c))]; };
+      rows = [['Code', 'Account', 'Amount'], ...ACCOUNTS.filter(a => a.parent === '4000').map(a => line(a.code)), ['', 'Total revenue', st.revenue], line('5100'), ['', 'Gross profit', st.gross], ...ACCOUNTS.filter(a => a.parent === '6000' || a.parent === '6500').map(a => line(a.code)), ['', 'Total expenses', st.expenses], ['', 'Net profit before tax', st.profit]];
+    } else if (view === 'trial') {
+      const tb = trialBalance(r.to);
+      rows = [['Code', 'Account', 'Debit', 'Credit'], ...tb.rows.map(a => [a.code, a.name, a.debit, a.credit]), ['', 'Total', tb.debit, tb.credit]];
+    } else if (view === 'ledger') {
+      const a = ACCOUNT.get(f.acct) || ACCOUNTS[1], l = accountLedger(a.code, r);
+      rows = [[`${a.code} · ${a.name}`], ['Date', 'Description', 'Order', 'Debit', 'Credit', 'Balance'], ['', 'Balance before the period', '', '', '', nat(a, l.opening)], ...l.rows.map(e => [e.d, e.why, e.orderId ?? '', e.amt > 0 ? e.amt : '', e.amt < 0 ? -e.amt : '', nat(a, e.balance)]), ['', 'Balance at end of period', '', '', '', nat(a, l.closing)]];
+    } else {
+      const b = accountBalances(r), end = accountBalances({ to: r.to });
+      rows = [['Code', 'Account', 'Type', 'Movement in period', 'Balance at end of period'], ...ACCOUNTS.map(a => [a.code, a.name, a.type, nat(a, b.get(a.code)), ['Asset', 'Liability', 'Equity'].includes(a.type) ? nat(a, end.get(a.code)) : ''])];
+    }
+    const T = c => typeof c === 'string' && c && isAr() ? trText(c) : c;
+    rows = [[title, S().company], ['Period', rangeLabel(r)], ['Currency', S().currency], [], ...rows].map(x => x.map(T));
+    download(`accounts-${view}-${today()}.csv`, '\uFEFF' + toCsv(rows), 'text/csv;charset=utf-8');
+    toast('Report downloaded. It opens in Excel.');
   },
   exportFinance() { const r = presetRange(ui.fin), t = totals(r); download('commerce-os-pnl.csv', toCsv([['metric', S().currency], ['Period', rangeLabel(r)], ['Recognized revenue', t.revenue], ['COGS', t.cogs], ['Gross profit', t.gross], ['Delivery and return costs', t.delivery], ['Payment and COD fees', t.fees], ['Marketing spend', t.marketing], ['Operating expenses', t.opex], ['Approved driver expenses', t.driverexp], ['Operating profit before tax', t.profit], ['Customer payments collected', t.collected], ['Business cash received', t.bizcash]]), 'text/csv'); toast('P&L exported.'); },
 
